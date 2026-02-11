@@ -1,10 +1,6 @@
 <?php
 declare(strict_types=1);
 
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
-error_reporting(E_ALL);
-
 require_once __DIR__ . "/../includes/auth_guard.php";
 require_role(["LECTURER"]);
 require_once __DIR__ . "/../config/db.php";
@@ -64,7 +60,7 @@ if (!$course) die("Course not found.");
       <div class="header">
         <div>
           <h2><?= htmlspecialchars($course["course_code"]) ?> - <?= htmlspecialchars($course["title"]) ?></h2>
-          <p>Manage materials, announcements and forum for this course.</p>
+          <p>Manage materials, announcements, forum, and view study groups for this course.</p>
         </div>
       </div>
 
@@ -79,14 +75,19 @@ if (!$course) die("Course not found.");
           <div class="small">Manage uploaded files</div>
         </a>
 
-        <a class="action-btn" href="#">
-          📢 Announcements
-          <div class="small">Coming next</div>
+        <a class="action-btn" href="<?= $base ?>/lecturer/announcements.php?course_id=<?= $courseId ?>">
+          📢 Announcements / Events
+          <div class="small">Post and manage announcements</div>
         </a>
 
-        <a class="action-btn" href="#">
-          💬 Forum Q&A
-          <div class="small">Coming next</div>
+        <a class="action-btn" href="<?= $base ?>/lecturer/forum.php?course_id=<?= $courseId ?>">
+          💬 Forum Q&amp;A
+          <div class="small">View questions and reply</div>
+        </a>
+
+        <a class="action-btn" href="<?= $base ?>/lecturer/study_groups.php?course_id=<?= $courseId ?>">
+          👥 Study Groups
+          <div class="small">See groups and members count</div>
         </a>
       </div>
 

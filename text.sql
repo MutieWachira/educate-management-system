@@ -75,3 +75,76 @@ CREATE TABLE materials (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+CREATE TABLE announcements (
+  announcement_id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  posted_by INT NOT NULL,
+  title VARCHAR(150) NOT NULL,
+  content TEXT NOT NULL,
+  event_date DATE NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_ann_course
+    FOREIGN KEY (course_id) REFERENCES courses(course_id)
+    ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT fk_ann_user
+    FOREIGN KEY (posted_by) REFERENCES users(userID)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE forum_threads (
+  thread_id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  created_by INT NOT NULL,
+  title VARCHAR(180) NOT NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_thread_course
+    FOREIGN KEY (course_id) REFERENCES courses(course_id)
+    ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT fk_thread_user
+    FOREIGN KEY (created_by) REFERENCES users(userID)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE forum_replies (
+  reply_id INT AUTO_INCREMENT PRIMARY KEY,
+  thread_id INT NOT NULL,
+  replied_by INT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_reply_thread
+    FOREIGN KEY (thread_id) REFERENCES forum_threads(thread_id)
+    ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT fk_reply_user
+    FOREIGN KEY (replied_by) REFERENCES users(userID)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE study_groups (
+  group_id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  created_by INT NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description TEXT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_group_course
+    FOREIGN KEY (course_id) REFERENCES courses(course_id)
+    ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT fk_group_creator
+    FOREIGN KEY (created_by) REFERENCES users(userID)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE study_group_members (
+  member_id INT AUTO_INCREMENT PRIMARY KEY,
+  group_id INT NOT NULL,
+  student_id INT NOT NULL,
+  joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_group_student (group_id, student_id),
+  CONSTRAINT fk_member_group
+    FOREIGN KEY (group_id) REFERENCES study_groups(group_id)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT fk_member_student
+    FOREIGN KEY (student_id) REFERENCES users(userID)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+);

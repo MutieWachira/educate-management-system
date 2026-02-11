@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+error_reporting(E_ALL);
+
 require_once __DIR__ . "/../includes/auth_guard.php";
 require_role(["STUDENT"]);
 require_once __DIR__ . "/../config/db.php";
@@ -70,19 +74,19 @@ if (!$course) die("Course not found.");
           <div class="small">Download notes & files</div>
         </a>
 
-        <a class="action-btn" href="#">
-          💬 Forum Q&A
-          <div class="small">Coming next</div>
-        </a>
-
-        <a class="action-btn" href="#">
-          👥 Study Groups
-          <div class="small">Coming next</div>
-        </a>
-
-        <a class="action-btn" href="#">
+        <a class="action-btn" href="<?= $base ?>/student/announcements.php?course_id=<?= $courseId ?>">
           📢 Announcements / Events
-          <div class="small">Coming next</div>
+          <div class="small">See course updates</div>
+        </a>
+
+        <a class="action-btn" href="<?= $base ?>/student/forum.php?course_id=<?= $courseId ?>">
+          💬 Forum Q&amp;A
+          <div class="small">Ask questions and reply</div>
+        </a>
+
+        <a class="action-btn" href="<?= $base ?>/student/study_groups.php?course_id=<?= $courseId ?>">
+          👥 Study Groups
+          <div class="small">Create and join study groups</div>
         </a>
       </div>
 
