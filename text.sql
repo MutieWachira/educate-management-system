@@ -59,3 +59,18 @@ CREATE TABLE enrollments (
     FOREIGN KEY (course_id) REFERENCES courses(course_id)
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
+
+CREATE TABLE materials (
+  material_id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  uploaded_by INT NOT NULL,
+  title VARCHAR(150) NOT NULL,
+  file_path VARCHAR(255) NOT NULL,
+  uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_material_course
+    FOREIGN KEY (course_id) REFERENCES courses(course_id)
+    ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT fk_material_uploader
+    FOREIGN KEY (uploaded_by) REFERENCES users(userID)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+);
