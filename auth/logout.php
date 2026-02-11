@@ -5,6 +5,6 @@ session_start();
 session_unset();
 session_destroy();
 
-header("Location: /academic_collab/auth/login.php");
+header("Location: /education%20system/auth/login.php");
 exit;
     
