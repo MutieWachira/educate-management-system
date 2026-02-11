@@ -74,3 +74,4 @@ CREATE TABLE materials (
     FOREIGN KEY (uploaded_by) REFERENCES users(userID)
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
+
