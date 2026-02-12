@@ -1,15 +1,26 @@
 <?php
 declare(strict_types=1);
 
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+error_reporting(E_ALL);
+
 require_once __DIR__ . "/../includes/auth_guard.php";
 require_role(["LECTURER"]);
 require_once __DIR__ . "/../config/db.php";
+require_once __DIR__ . "/../includes/notifier.php";
+require_once __DIR__ . "/../includes/logger.php"; // ✅ REQUIRED for log_activity()
 
 $base = "/education%20system";
 $lecturerId = (int)$_SESSION["user"]["user_id"];
 $courseId = (int)($_GET["course_id"] ?? 0);
 
 if ($courseId <= 0) die("Invalid course.");
+
+// ✅ CSRF token (distinction-level, no logic change)
+if (empty($_SESSION["csrf"])) {
+  $_SESSION["csrf"] = bin2hex(random_bytes(16));
+}
 
 // Ensure lecturer assigned
 $check = $pdo->prepare("SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=? LIMIT 1");
@@ -21,20 +32,93 @@ $cq = $pdo->prepare("SELECT course_code, title FROM courses WHERE course_id=? LI
 $cq->execute([$courseId]);
 $course = $cq->fetch();
 
-$msg = ""; $error = "";
+$msg = "";
+$error = "";
+
+if (($_GET["ok"] ?? "") === "1") {
+  $msg = "Announcement posted and email notifications sent.";
+}
+
+// Keep form values on error (UX)
+$formTitle = "";
+$formContent = "";
+$formEventDate = "";
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
+  // ✅ CSRF validation
+  if (!hash_equals($_SESSION["csrf"], (string)($_POST["csrf"] ?? ""))) {
+    die("Invalid CSRF token.");
+  }
+
   $title = trim($_POST["title"] ?? "");
   $content = trim($_POST["content"] ?? "");
   $event_date = trim($_POST["event_date"] ?? "");
 
+  // keep values
+  $formTitle = $title;
+  $formContent = $content;
+  $formEventDate = $event_date;
+
   if ($title === "" || $content === "") {
-    $error = "Title and content are required.";
+    $error = "Title and message are required.";
   } else {
     $dateVal = ($event_date === "") ? null : $event_date;
-    $ins = $pdo->prepare("INSERT INTO announcements (course_id, posted_by, title, content, event_date) VALUES (?, ?, ?, ?, ?)");
-    $ins->execute([$courseId, $lecturerId, $title, $content, $dateVal]);
-    $msg = "Posted successfully.";
+
+    try {
+      $pdo->beginTransaction();
+
+      // Insert announcement
+      $ins = $pdo->prepare(
+        "INSERT INTO announcements (course_id, posted_by, title, content, event_date)
+         VALUES (?, ?, ?, ?, ?)"
+      );
+      $ins->execute([$courseId, $lecturerId, $title, $content, $dateVal]);
+
+      // Fetch students enrolled in this course
+      $studentsStmt = $pdo->prepare("SELECT student_id FROM enrollments WHERE course_id=?");
+      $studentsStmt->execute([$courseId]);
+      $students = $studentsStmt->fetchAll();
+
+      $link = "{$base}/student/announcements.php?course_id={$courseId}";
+
+      // Build detailed notification message
+      $notifTitle = "New Announcement - " . ($course["course_code"] ?? "");
+      $notifMessage = "Course: " . ($course["course_code"] ?? "") . "\n";
+      $notifMessage .= "Title: {$title}\n";
+      if ($event_date !== "") $notifMessage .= "Event Date: {$event_date}\n";
+      $notifMessage .= "Message:\n{$content}";
+
+      foreach ($students as $s) {
+        notify_user(
+          $pdo,
+          (int)$s["student_id"],
+          "ANNOUNCEMENT",
+          $notifTitle,
+          $notifMessage,
+          $link,
+          true
+        );
+      }
+
+      // ✅ Log only after success
+      log_activity(
+        $pdo,
+        $lecturerId,
+        "POST_ANNOUNCEMENT",
+        "Course: {$courseId} | Title: {$title} | Event: " . ($event_date ?: "N/A")
+      );
+
+      $pdo->commit();
+
+      // ✅ avoid double send on refresh
+      header("Location: {$base}/lecturer/announcements.php?course_id={$courseId}&ok=1");
+      exit;
+
+    } catch (Throwable $e) {
+      if ($pdo->inTransaction()) $pdo->rollBack();
+      $error = "Failed to post announcement.";
+      // error_log($e->getMessage());
+    }
   }
 }
 
@@ -86,13 +170,24 @@ $items = $stmt->fetchAll();
         </div>
       </div>
 
-      <?php if ($msg): ?><p style="color:green;font-weight:700;"><?= htmlspecialchars($msg) ?></p><?php endif; ?>
-      <?php if ($error): ?><p style="color:#b91c1c;font-weight:700;"><?= htmlspecialchars($error) ?></p><?php endif; ?>
+      <?php if ($msg): ?>
+        <p style="color:green;font-weight:800;"><?= htmlspecialchars($msg) ?></p>
+      <?php endif; ?>
+
+      <?php if ($error): ?>
+        <p style="color:#b91c1c;font-weight:800;"><?= htmlspecialchars($error) ?></p>
+      <?php endif; ?>
 
       <form class="filters" method="post">
-        <input type="text" name="title" placeholder="Title e.g. CAT 1 Reminder" required>
-        <input type="date" name="event_date" placeholder="Event date (optional)">
-        <textarea name="content" placeholder="Write announcement details..." required style="width:100%;min-height:110px;padding:12px;border-radius:12px;border:1px solid #e5e7eb;"></textarea>
+        <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf"]) ?>">
+        <input type="text" name="title" placeholder="Title e.g. CAT 1 Reminder" required
+               value="<?= htmlspecialchars($formTitle) ?>">
+        <input type="date" name="event_date"
+               value="<?= htmlspecialchars($formEventDate) ?>">
+
+        <textarea name="content" placeholder="Write announcement details..." required
+          style="width:100%;min-height:110px;padding:12px;border-radius:12px;border:1px solid #e5e7eb;"><?= htmlspecialchars($formContent) ?></textarea>
+
         <button class="btn" type="submit">Post</button>
         <a class="back" href="<?= $base ?>/lecturer/course.php?course_id=<?= $courseId ?>">Back</a>
       </form>
@@ -113,11 +208,14 @@ $items = $stmt->fetchAll();
           <?php else: ?>
             <?php foreach ($items as $a): ?>
               <tr>
-                <td><?= htmlspecialchars($a["title"]) ?></td>
+                <td><b><?= htmlspecialchars($a["title"]) ?></b></td>
                 <td><?= htmlspecialchars($a["event_date"] ?? "-") ?></td>
                 <td><?= htmlspecialchars($a["created_at"]) ?></td>
                 <td>
-                  <a class="action-link danger" href="<?= $base ?>/lecturer/delete_announcement.php?course_id=<?= $courseId ?>&id=<?= (int)$a["announcement_id"] ?>">Delete</a>
+                  <a class="action-link danger"
+                     href="<?= $base ?>/lecturer/delete_announcement.php?course_id=<?= $courseId ?>&id=<?= (int)$a["announcement_id"] ?>">
+                    Delete
+                  </a>
                 </td>
               </tr>
               <tr>

@@ -4,11 +4,15 @@ Create database ems_db
 create table users(
     userID int(10) PRIMARY KEY AUTO_INCREMENT,
     full_name varchar(50) NOT NULL,
+    admission_no VARCHAR(30) NULL,
     email varchar(255) NOT NULL,
-    password varchar(50) NOT NULL,
+    password varchar(255) NOT NULL,
     role ENUM('ADMIN', 'LECTURER', 'STUDENT') NOT NULL,
+    must_change_password TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE UNIQUE INDEX uniq_users_admission_no ON users(admission_no);
 
 INSERT INTO `users` (`userID`, `full_name`, `email`, `password`, `role`, `created_at`) VALUES 
 (NULL, 'admin', 'admin@ems.com', '123456', 'ADMIN', current_timestamp()), 
@@ -148,3 +152,32 @@ CREATE TABLE study_group_members (
     FOREIGN KEY (student_id) REFERENCES users(userID)
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
+
+CREATE TABLE notifications (
+  notification_id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  type VARCHAR(40) NOT NULL,        -- ANNOUNCEMENT, FORUM_REPLY, GROUP_JOIN, etc
+  title VARCHAR(160) NOT NULL,
+  message TEXT NOT NULL,
+  link VARCHAR(255) NULL,
+  is_read TINYINT(1) NOT NULL DEFAULT 0,
+  reminder_sent TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_notif_user
+    FOREIGN KEY (user_id) REFERENCES users(userID)
+    ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE INDEX idx_notif_user_read ON notifications(user_id, is_read);
+
+CREATE TABLE activity_logs (
+  log_id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  action VARCHAR(80) NOT NULL,
+  details VARCHAR(255) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX(user_id),
+  CONSTRAINT fk_logs_user FOREIGN KEY (user_id)
+    REFERENCES users(userID) ON DELETE CASCADE ON UPDATE CASCADE
+);
+

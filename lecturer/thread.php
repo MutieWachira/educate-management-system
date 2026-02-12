@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . "/../includes/auth_guard.php";
 require_role(["LECTURER"]);
 require_once __DIR__ . "/../config/db.php";
+require_once __DIR__ . "/../includes/notifier.php";
 
 $base = "/education%20system";
 $lecturerId = (int)$_SESSION["user"]["user_id"];
@@ -12,7 +13,7 @@ $threadId = (int)($_GET["thread_id"] ?? 0);
 
 if ($courseId <= 0 || $threadId <= 0) die("Invalid request.");
 
-// ✅ Lecturer must be ASSIGNED (not enrolled)
+// Lecturer must be assigned
 $check = $pdo->prepare("SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=? LIMIT 1");
 $check->execute([$lecturerId, $courseId]);
 if (!$check->fetch()) {
@@ -22,7 +23,8 @@ if (!$check->fetch()) {
 
 // Thread details (ensure it belongs to course)
 $tq = $pdo->prepare("
-  SELECT t.title, t.body, t.created_at, u.full_name AS author, u.role AS author_role
+  SELECT t.title, t.body, t.created_at, t.created_by,
+         u.full_name AS author, u.role AS author_role
   FROM forum_threads t
   INNER JOIN users u ON u.userID = t.created_by
   WHERE t.thread_id=? AND t.course_id=? LIMIT 1
@@ -37,13 +39,56 @@ $error = "";
 // Reply (lecturer)
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
   $body = trim($_POST["body"] ?? "");
+
   if ($body === "") {
     $error = "Reply cannot be empty.";
   } else {
-    $ins = $pdo->prepare("INSERT INTO forum_replies (thread_id, replied_by, body) VALUES (?,?,?)");
-    $ins->execute([$threadId, $lecturerId, $body]);
-    $msg = "Reply posted.";
+    try {
+      $pdo->beginTransaction();
+
+      // Insert reply
+      $ins = $pdo->prepare("INSERT INTO forum_replies (thread_id, replied_by, body) VALUES (?,?,?)");
+      $ins->execute([$threadId, $lecturerId, $body]);
+
+      // Notify thread owner (DB notification + email)
+      $ownerId = (int)$thread["created_by"];
+
+      // Don’t notify yourself if lecturer is also the owner (rare but safe)
+      if ($ownerId !== $lecturerId) {
+        $link = "{$base}/student/thread.php?course_id={$courseId}&thread_id={$threadId}";
+
+        // Short preview of reply for email
+        $preview = mb_substr($body, 0, 140);
+        if (mb_strlen($body) > 140) $preview .= "...";
+
+        notify_user(
+          $pdo,
+          $ownerId,
+          "FORUM_REPLY",
+          "Lecturer replied: " . (string)$thread["title"],
+          "Reply: " . $preview,
+          $link,
+          true
+        );
+      }
+
+      $pdo->commit();
+      $msg = "Reply posted and notification sent.";
+      // Prevent duplicate submission on refresh
+      header("Location: {$base}/lecturer/thread.php?course_id={$courseId}&thread_id={$threadId}&sent=1");
+      exit;
+    } catch (Throwable $e) {
+      if ($pdo->inTransaction()) $pdo->rollBack();
+      $error = "Failed to post reply.";
+      // Optional debug:
+      // error_log($e->getMessage());
+    }
   }
+}
+
+// Show success message after redirect
+if (($_GET["sent"] ?? "") === "1" && $msg === "") {
+  $msg = "Reply posted and notification sent.";
 }
 
 // Fetch replies
@@ -89,15 +134,19 @@ $rows = $replies->fetchAll();
     <div class="card">
       <div class="header">
         <div>
-          <h2><?= htmlspecialchars($thread["title"]) ?></h2>
-          <p>By <?= htmlspecialchars($thread["author"]) ?> (<?= htmlspecialchars($thread["author_role"]) ?>) • <?= htmlspecialchars($thread["created_at"]) ?></p>
+          <h2><?= htmlspecialchars((string)$thread["title"]) ?></h2>
+          <p>
+            By <?= htmlspecialchars((string)$thread["author"]) ?>
+            (<?= htmlspecialchars((string)$thread["author_role"]) ?>)
+            • <?= htmlspecialchars((string)$thread["created_at"]) ?>
+          </p>
         </div>
       </div>
 
-      <p style="color:#374151; margin-bottom:14px;"><?= nl2br(htmlspecialchars($thread["body"])) ?></p>
+      <p style="color:#374151; margin-bottom:14px;"><?= nl2br(htmlspecialchars((string)$thread["body"])) ?></p>
 
-      <?php if ($msg): ?><p style="color:green;font-weight:700;"><?= htmlspecialchars($msg) ?></p><?php endif; ?>
-      <?php if ($error): ?><p style="color:#b91c1c;font-weight:700;"><?= htmlspecialchars($error) ?></p><?php endif; ?>
+      <?php if ($msg): ?><p style="color:green;font-weight:800;"><?= htmlspecialchars($msg) ?></p><?php endif; ?>
+      <?php if ($error): ?><p style="color:#b91c1c;font-weight:800;"><?= htmlspecialchars($error) ?></p><?php endif; ?>
 
       <form class="filters" method="post">
         <textarea name="body" placeholder="Write a reply..." required style="width:100%;min-height:90px;"></textarea>
@@ -116,9 +165,9 @@ $rows = $replies->fetchAll();
               <tbody>
               <?php foreach ($rows as $r): ?>
                 <tr>
-                  <td><?= nl2br(htmlspecialchars($r["body"])) ?></td>
-                  <td><?= htmlspecialchars($r["author"]) ?> (<?= htmlspecialchars($r["role"]) ?>)</td>
-                  <td><?= htmlspecialchars($r["created_at"]) ?></td>
+                  <td><?= nl2br(htmlspecialchars((string)$r["body"])) ?></td>
+                  <td><?= htmlspecialchars((string)$r["author"]) ?> (<?= htmlspecialchars((string)$r["role"]) ?>)</td>
+                  <td><?= htmlspecialchars((string)$r["created_at"]) ?></td>
                 </tr>
               <?php endforeach; ?>
               </tbody>
