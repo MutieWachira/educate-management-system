@@ -9,15 +9,16 @@ require_once __DIR__ . "/../includes/auth_guard.php";
 require_role(["LECTURER"]);
 require_once __DIR__ . "/../config/db.php";
 require_once __DIR__ . "/../includes/notifier.php";
+require_once __DIR__ . "/../includes/logger.php";
 
 $base = "/education%20system";
-$lecturerId = (int)$_SESSION["user"]["user_id"];
+$lecturerId = (int)($_SESSION["user"]["user_id"] ?? 0);
 $courseId = (int)($_GET["course_id"] ?? 0);
 
-
-log_activity($pdo, $lecturerId, "UPLOAD_MATERIAL", "Course: $courseId | $title");
-
-if ($courseId <= 0) die("Invalid course.");
+if ($courseId <= 0) {
+  http_response_code(400);
+  die("Invalid course.");
+}
 
 // Ensure lecturer assigned
 $check = $pdo->prepare("SELECT 1 FROM lecturer_courses WHERE lecturer_id = ? AND course_id = ? LIMIT 1");
@@ -36,7 +37,7 @@ if (($_GET["ok"] ?? "") === "1") {
 }
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-  $title = trim($_POST["title"] ?? "");
+  $title = trim((string)($_POST["title"] ?? ""));
 
   if ($title === "") {
     $error = "Title is required.";
@@ -45,17 +46,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
   } else {
     $file = $_FILES["file"];
 
-    if ($file["error"] !== UPLOAD_ERR_OK) {
-      $error = "File upload failed (error code: " . (int)$file["error"] . ").";
+    if (($file["error"] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+      $error = "File upload failed (error code: " . (int)($file["error"] ?? -1) . ").";
     } else {
-      // ✅ Limit size (e.g., 15MB)
+      // ✅ Limit size (15MB)
       $maxBytes = 15 * 1024 * 1024;
-      if ((int)$file["size"] > $maxBytes) {
+      if ((int)($file["size"] ?? 0) > $maxBytes) {
         $error = "File too large. Maximum allowed is 15MB.";
       } else {
-        $allowedExt = ["pdf","doc","docx","ppt","pptx"];
-        $originalName = (string)$file["name"];
-        $tmp = (string)$file["tmp_name"];
+        $allowedExt = ["pdf", "doc", "docx", "ppt", "pptx"];
+        $originalName = (string)($file["name"] ?? "");
+        $tmp = (string)($file["tmp_name"] ?? "");
 
         $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
 
@@ -64,7 +65,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         } else {
           // ✅ Extra MIME validation (helps against fake extensions)
           $finfo = finfo_open(FILEINFO_MIME_TYPE);
-          $mime = $finfo ? finfo_file($finfo, $tmp) : "";
+          $mime = $finfo ? (string)finfo_file($finfo, $tmp) : "";
           if ($finfo) finfo_close($finfo);
 
           $allowedMimes = [
@@ -81,64 +82,85 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
           } else {
             // Safer file naming
             $safeName = preg_replace('/[^a-zA-Z0-9_\-]/', '_', pathinfo($originalName, PATHINFO_FILENAME));
-            $safeName = trim($safeName, "_");
+            $safeName = trim((string)$safeName, "_");
             if ($safeName === "") $safeName = "material";
 
             // Include lecturer + course for uniqueness
             $newName = "Lec{$lecturerId}_C{$courseId}_" . $safeName . "_" . time() . "." . $ext;
 
             $uploadDir = __DIR__ . "/../assets/uploads/";
+
+            // ✅ Ensure upload dir exists and is writable
             if (!is_dir($uploadDir)) {
-              mkdir($uploadDir, 0777, true);
+              if (!mkdir($uploadDir, 0777, true)) {
+                $error = "Upload folder not writable. Fix permissions for: " . $uploadDir;
+              }
+            }
+            if ($error === "" && !is_writable($uploadDir)) {
+              $error = "Upload folder not writable. Fix permissions for: " . $uploadDir;
             }
 
-            $destPath = $uploadDir . $newName;
+            if ($error === "") {
+              $destPath = $uploadDir . $newName;
 
-            if (!move_uploaded_file($tmp, $destPath)) {
-              $error = "Failed to save uploaded file (check folder permissions).";
-            } else {
-              // Store relative path
-              $relativePath = "assets/uploads/" . $newName;
+              if (!move_uploaded_file($tmp, $destPath)) {
+                $error = "Failed to save uploaded file (check folder permissions).";
+              } else {
+                // Store relative path
+                $relativePath = "assets/uploads/" . $newName;
 
-              try {
-                $pdo->beginTransaction();
+                try {
+                  $pdo->beginTransaction();
 
-                // Insert into materials
-                $ins = $pdo->prepare("INSERT INTO materials (course_id, uploaded_by, title, file_path) VALUES (?, ?, ?, ?)");
-                $ins->execute([$courseId, $lecturerId, $title, $relativePath]);
-
-                // ✅ Notify enrolled students AFTER success
-                $studentsStmt = $pdo->prepare("SELECT student_id FROM enrollments WHERE course_id=?");
-                $studentsStmt->execute([$courseId]);
-                $students = $studentsStmt->fetchAll();
-
-                $link = "{$base}/student/materials.php?course_id={$courseId}";
-                $notifTitle = "New course material uploaded";
-                $notifMessage = "Title: {$title}\nFile: {$newName}";
-
-                foreach ($students as $s) {
-                  notify_user(
-                    $pdo,
-                    (int)$s["student_id"],
-                    "NEW_MATERIAL",
-                    $notifTitle,
-                    $notifMessage,
-                    $link,
-                    true
+                  // Insert into materials
+                  $ins = $pdo->prepare(
+                    "INSERT INTO materials (course_id, uploaded_by, title, file_path)
+                     VALUES (?, ?, ?, ?)"
                   );
+                  $ins->execute([$courseId, $lecturerId, $title, $relativePath]);
+
+                  // Notify enrolled students AFTER success
+                  $studentsStmt = $pdo->prepare("SELECT student_id FROM enrollments WHERE course_id=?");
+                  $studentsStmt->execute([$courseId]);
+                  $students = $studentsStmt->fetchAll();
+
+                  $link = "{$base}/student/materials.php?course_id={$courseId}";
+                  $notifTitle = "New course material uploaded";
+                  $notifMessage = "Title: {$title}\nFile: {$newName}";
+
+                  foreach ($students as $s) {
+                    notify_user(
+                      $pdo,
+                      (int)$s["student_id"],
+                      "NEW_MATERIAL",
+                      $notifTitle,
+                      $notifMessage,
+                      $link,
+                      true
+                    );
+                  }
+
+                  // ✅ Log only after everything succeeds
+                  log_activity(
+                    $pdo,
+                    $lecturerId,
+                    "UPLOAD_MATERIAL",
+                    "Course: $courseId | Title: $title | File: $newName"
+                  );
+
+                  $pdo->commit();
+
+                  // Avoid double upload on refresh
+                  header("Location: {$base}/lecturer/upload_material.php?course_id={$courseId}&ok=1");
+                  exit;
+
+                } catch (Throwable $e) {
+                  if ($pdo->inTransaction()) $pdo->rollBack();
+                  // Since we rolled back, the material wasn't saved in DB.
+                  $error = "Upload failed. Please try again.";
+                  // Optional debug:
+                  // error_log($e->getMessage());
                 }
-
-                $pdo->commit();
-
-                // ✅ Avoid double upload on refresh
-                header("Location: {$base}/lecturer/upload_material.php?course_id={$courseId}&ok=1");
-                exit;
-
-              } catch (Throwable $e) {
-                if ($pdo->inTransaction()) $pdo->rollBack();
-                $error = "Material saved but notification failed. Try again.";
-                // Optional debug:
-                // error_log($e->getMessage());
               }
             }
           }
@@ -164,7 +186,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     <div>Academic Collaboration System<br><span style="font-size:12px;opacity:.85;">Lecturer Panel</span></div>
   </div>
   <div class="user">
-    <div class="pill"><?= htmlspecialchars($_SESSION["user"]["full_name"]) ?> • LECTURER</div>
+    <div class="pill"><?= htmlspecialchars((string)$_SESSION["user"]["full_name"]) ?> • LECTURER</div>
   </div>
 </div>
 
@@ -187,12 +209,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         </div>
       </div>
 
-      <?php if ($msg): ?><p style="color:green;font-weight:800;"><?= htmlspecialchars($msg) ?></p><?php endif; ?>
-      <?php if ($error): ?><p style="color:#b91c1c;font-weight:800;"><?= htmlspecialchars($error) ?></p><?php endif; ?>
+      <?php if ($msg): ?>
+        <p style="color:green;font-weight:800;"><?= htmlspecialchars($msg) ?></p>
+      <?php endif; ?>
+
+      <?php if ($error): ?>
+        <p style="color:#b91c1c;font-weight:800;"><?= htmlspecialchars($error) ?></p>
+      <?php endif; ?>
 
       <form class="filters" method="post" enctype="multipart/form-data">
         <input type="text" name="title" placeholder="Material title e.g. Week 1 Notes" required>
-        <input type="file" name="file" required>
+        <input type="file" name="file" required accept=".pdf,.doc,.docx,.ppt,.pptx">
         <button class="btn" type="submit">Upload</button>
         <a class="back" href="<?= $base ?>/lecturer/course.php?course_id=<?= $courseId ?>">Back</a>
       </form>
