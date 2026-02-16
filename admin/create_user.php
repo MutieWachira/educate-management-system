@@ -93,7 +93,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         );
         $stmt->execute([$full_name, $email, $admissionNo, $hashedPassword, $role]);
 
-        // ✅ Log only AFTER insert succeeds (single log)
+        // Log only AFTER insert succeeds (single log)
         log_activity(
           $pdo,
           (int)$_SESSION["user"]["user_id"],
@@ -126,15 +126,15 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         ";
 
         $sent = send_email($email, $full_name, $subject, $html);
-        $emailStatus = $sent ? "✅ Credentials email sent." : "⚠️ Account created, but email failed to send.";
+        $emailStatus = $sent ? "Credentials email sent." : "⚠️ Account created, but email failed to send.";
 
         $msg = "User created successfully!";
         $_POST = [];
 
       } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
-        $error = "Failed to create user. Please try again.";
-        // error_log($e->getMessage());
+        $error = "Failed to create user. Please try again. Error: " . $e->getMessage();
+        //error_log($e->getMessage());
       }
     }
   }

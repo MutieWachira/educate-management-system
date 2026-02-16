@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 ini_set('display_errors', '1');
@@ -16,11 +17,12 @@ $q = trim($_GET["q"] ?? "");
 $role = trim($_GET["role"] ?? "");
 
 // Build query (safe prepared statements)
-$sql = "SELECT userID, full_name, email, role FROM users WHERE 1=1";
+$sql = "SELECT userID, full_name, email, role, admission_no FROM users WHERE 1=1";
 $params = [];
 
 if ($q !== "") {
-  $sql .= " AND (full_name LIKE ? OR email LIKE ?)";
+  $sql .= " AND (full_name LIKE ? OR email LIKE ? OR admission_no LIKE ?)";
+  $params[] = "%$q%";
   $params[] = "%$q%";
   $params[] = "%$q%";
 }
@@ -36,7 +38,8 @@ $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $users = $stmt->fetchAll();
 
-function roleBadgeClass(string $r): string {
+function roleBadgeClass(string $r): string
+{
   $r = strtoupper($r);
   if ($r === "ADMIN") return "admin";
   if ($r === "LECTURER") return "lecturer";
@@ -45,12 +48,14 @@ function roleBadgeClass(string $r): string {
 ?>
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Manage Users</title>
   <link rel="stylesheet" href="<?= $base ?>/assets/css/manage_users.css">
 </head>
+
 <body>
 
   <!-- Topbar -->
@@ -99,54 +104,63 @@ function roleBadgeClass(string $r): string {
         </div>
 
         <form class="filters" method="get">
-          <input type="text" name="q" placeholder="Search name or email..." value="<?= htmlspecialchars($q) ?>">
+          <input id="searchInput" type="text" name="q"
+            placeholder="Search admission no, name or email..."
+            value="<?= htmlspecialchars($q) ?>" autocomplete="off">
           <select name="role">
             <option value="">All Roles</option>
-            <option value="ADMIN" <?= $role==="ADMIN" ? "selected" : "" ?>>ADMIN</option>
-            <option value="LECTURER" <?= $role==="LECTURER" ? "selected" : "" ?>>LECTURER</option>
-            <option value="STUDENT" <?= $role==="STUDENT" ? "selected" : "" ?>>STUDENT</option>
+            <option value="ADMIN" <?= $role === "ADMIN" ? "selected" : "" ?>>ADMIN</option>
+            <option value="LECTURER" <?= $role === "LECTURER" ? "selected" : "" ?>>LECTURER</option>
+            <option value="STUDENT" <?= $role === "STUDENT" ? "selected" : "" ?>>STUDENT</option>
           </select>
           <button class="btn" type="submit">Search</button>
         </form>
 
         <div class="table-wrap">
-          <table>
-  <thead>
-    <tr>
-      <th>ID</th>
-      <th>Full Name</th>
-      <th>Email</th>
-      <th>Role</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    <?php if (!$users): ?>
-      <tr><td colspan="5">No users found.</td></tr>
-    <?php else: ?>
-      <?php foreach ($users as $u): ?>
-        <tr>
-          <td><?= (int)$u["userID"] ?></td>
-          <td><?= htmlspecialchars($u["full_name"]) ?></td>
-          <td><?= htmlspecialchars($u["email"]) ?></td>
-          <td>
-            <span class="badge <?= roleBadgeClass((string)$u["role"]) ?>">
-              <?= htmlspecialchars($u["role"]) ?>
-            </span>
-          </td>
-          <td>
-            <div class="action-links">
-              <a class="action-link" href="<?= $base ?>/admin/edit_user.php?id=<?= (int)$u["userID"] ?>">Edit</a>
-              <a class="action-link danger" href="<?= $base ?>/admin/delete_user.php?id=<?= (int)$u["userID"] ?>">Delete</a>
-            </div>
-          </td>
-        </tr>
-      <?php endforeach; ?>
-    <?php endif; ?>
-  </tbody>
-</table>
+  <table id="usersTable">
+    <thead>
+      <tr>
+        <th>Student ID</th>
+        <th>Full Name</th>
+        <th>Email</th>
+        <th>Role</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="usersTbody">
+      <?php if (!$users): ?>
+        <tr class="no-data"><td colspan="5">No users found.</td></tr>
+      <?php else: ?>
+        <?php foreach ($users as $u): ?>
+          <tr class="user-row">
+            <td class="col-adm">
+              <?= htmlspecialchars((string)($u["admission_no"] ?? "-")) ?>
+            </td>
+            <td class="col-name"><?= htmlspecialchars((string)$u["full_name"]) ?></td>
+            <td class="col-email"><?= htmlspecialchars((string)$u["email"]) ?></td>
+            <td class="col-role">
+              <span class="badge <?= roleBadgeClass((string)$u["role"]) ?>">
+                <?= htmlspecialchars((string)$u["role"]) ?>
+              </span>
+            </td>
+            <td>
+              <div class="action-links">
+                <a class="action-link" href="<?= $base ?>/admin/edit_user.php?id=<?= (int)$u["userID"] ?>">Edit</a>
+                <a class="action-link danger" href="<?= $base ?>/admin/delete_user.php?id=<?= (int)$u["userID"] ?>">Delete</a>
+              </div>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      <?php endif; ?>
 
-        </div>
+      <!-- hidden row shown when no matches during live search -->
+      <tr id="noMatchesRow" style="display:none;">
+        <td colspan="5">No matching users.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
 
         <div class="footer-row">
           <a class="back" href="<?= $base ?>/admin/dashboard.php">← Back to Dashboard</a>
@@ -155,5 +169,53 @@ function roleBadgeClass(string $r): string {
     </main>
   </div>
 
+  <script>
+  (function () {
+    const input = document.getElementById("searchInput");
+    const tbody = document.getElementById("usersTbody");
+    const rows = Array.from(tbody.querySelectorAll("tr.user-row"));
+    const noMatchesRow = document.getElementById("noMatchesRow");
+
+    if (!input) return;
+
+    function normalize(s) {
+      return (s || "").toString().trim().toLowerCase();
+    }
+
+    function filterRows() {
+      const term = normalize(input.value);
+
+      let visibleCount = 0;
+
+      rows.forEach(row => {
+        // Searchable text = admission + name + email + role
+        const adm = normalize(row.querySelector(".col-adm")?.textContent);
+        const name = normalize(row.querySelector(".col-name")?.textContent);
+        const email = normalize(row.querySelector(".col-email")?.textContent);
+        const role = normalize(row.querySelector(".col-role")?.textContent);
+
+        const haystack = `${adm} ${name} ${email} ${role}`;
+
+        const match = term === "" || haystack.includes(term);
+
+        row.style.display = match ? "" : "none";
+        if (match) visibleCount++;
+      });
+
+      // Show "no matching users" only when user typed and none visible
+      if (noMatchesRow) {
+        noMatchesRow.style.display = (term !== "" && visibleCount === 0) ? "" : "none";
+      }
+    }
+
+    // Live as you type
+    input.addEventListener("input", filterRows);
+
+    // Run once on load (in case q is pre-filled)
+    filterRows();
+  })();
+</script>
+
 </body>
+
 </html>

@@ -17,6 +17,14 @@ if ($id <= 0) die("Invalid user ID.");
 $msg = "";
 $error = "";
 
+$loggedInId = (int)($_SESSION["user"]["user_id"] ?? 0);
+$isSelf = ($id === $loggedInId);
+
+// CSRF
+if (empty($_SESSION["csrf"])) {
+  $_SESSION["csrf"] = bin2hex(random_bytes(16));
+}
+
 // Fetch user
 $stmt = $pdo->prepare("SELECT userID, full_name, email, role FROM users WHERE userID = ? LIMIT 1");
 $stmt->execute([$id]);
@@ -24,6 +32,11 @@ $user = $stmt->fetch();
 if (!$user) die("User not found.");
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
+  // CSRF check
+  if (!hash_equals($_SESSION["csrf"], (string)($_POST["csrf"] ?? ""))) {
+    die("Invalid CSRF token.");
+  }
+
   $full_name = trim($_POST["full_name"] ?? "");
   $email = trim($_POST["email"] ?? "");
   $role = trim($_POST["role"] ?? "");
@@ -36,32 +49,51 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
   } elseif (!in_array($role, ["ADMIN", "LECTURER", "STUDENT"], true)) {
     $error = "Invalid role selected.";
   } else {
+    // ✅ Prevent changing your own role (server-side protection)
+    if ($isSelf) {
+      $role = (string)$user["role"];
+    }
+
     // Check email uniqueness (exclude current user)
     $check = $pdo->prepare("SELECT userID FROM users WHERE email = ? AND userID <> ? LIMIT 1");
     $check->execute([$email, $id]);
     if ($check->fetch()) {
       $error = "Email already exists for another user.";
     } else {
-      // Update profile fields
-      $upd = $pdo->prepare("UPDATE users SET full_name=?, email=?, role=? WHERE userID=? LIMIT 1");
-      $upd->execute([$full_name, $email, $role, $id]);
+      // Validate password first (so we don’t update profile then fail password)
+      $new_password = trim($new_password);
+      if ($new_password !== "" && strlen($new_password) < 4) {
+        $error = "Password must be at least 4 characters.";
+      } else {
+        try {
+          $pdo->beginTransaction();
 
-      //  If password provided, hash and update
-      if (trim($new_password) !== "") {
-        if (strlen($new_password) < 4) {
-          $error = "Password must be at least 4 characters.";
-        } else {
-          $hash = password_hash($new_password, PASSWORD_DEFAULT);
-          $pupd = $pdo->prepare("UPDATE users SET password=? WHERE userID=? LIMIT 1");
-          $pupd->execute([$hash, $id]);
+          // Update profile fields
+          $upd = $pdo->prepare("UPDATE users SET full_name=?, email=?, role=? WHERE userID=? LIMIT 1");
+          $upd->execute([$full_name, $email, $role, $id]);
+
+          // If password provided, hash and update
+          if ($new_password !== "") {
+            $hash = password_hash($new_password, PASSWORD_DEFAULT);
+            $pupd = $pdo->prepare("UPDATE users SET password=?, must_change_password=1 WHERE userID=? LIMIT 1");
+            $pupd->execute([$hash, $id]);
+          }
+
+          $pdo->commit();
+
+          $msg = $new_password !== ""
+            ? "User updated successfully (password reset)."
+            : "User updated successfully!";
+
+          // Refresh user data
+          $stmt->execute([$id]);
+          $user = $stmt->fetch();
+
+        } catch (Throwable $e) {
+          if ($pdo->inTransaction()) $pdo->rollBack();
+          $error = "Failed to update user.";
+          // error_log($e->getMessage());
         }
-      }
-
-      if ($error === "") {
-        $msg = "User updated successfully!";
-        // Refresh user data
-        $stmt->execute([$id]);
-        $user = $stmt->fetch();
       }
     }
   }
@@ -106,7 +138,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       <div class="header">
         <div>
           <h2>Edit User</h2>
-          <p>Update user details and optionally change password (hashed).</p>
+          <p>Update user details and optionally reset password.</p>
         </div>
         <div>
           <a class="btn" href="<?= $base ?>/admin/manage_users.php">← Back</a>
@@ -114,25 +146,39 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       </div>
 
       <?php if ($msg): ?>
-        <p style="color:green;font-weight:800;"><?= htmlspecialchars($msg) ?></p>
+        <div style="border:1px solid #bbf7d0;background:#ecfdf5;padding:12px;border-radius:12px;margin-bottom:12px;">
+          <p style="color:#065f46;font-weight:900;margin:0;"><?= htmlspecialchars($msg) ?></p>
+        </div>
       <?php endif; ?>
 
       <?php if ($error): ?>
-        <p style="color:#b91c1c;font-weight:800;"><?= htmlspecialchars($error) ?></p>
+        <div style="border:1px solid #fecaca;background:#fef2f2;padding:12px;border-radius:12px;margin-bottom:12px;">
+          <p style="color:#b91c1c;font-weight:900;margin:0;"><?= htmlspecialchars($error) ?></p>
+        </div>
       <?php endif; ?>
 
       <form method="post" class="filters" style="margin-top:12px;">
+        <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf"]) ?>">
+
         <input type="text" name="full_name" placeholder="Full Name" required
-               value="<?= htmlspecialchars($user["full_name"]) ?>">
+               value="<?= htmlspecialchars((string)$user["full_name"]) ?>">
 
         <input type="email" name="email" placeholder="Email" required
-               value="<?= htmlspecialchars($user["email"]) ?>">
+               value="<?= htmlspecialchars((string)$user["email"]) ?>">
 
-        <select name="role" required>
+        <select name="role" required <?= $isSelf ? "disabled" : "" ?>>
           <option value="STUDENT"  <?= $user["role"]==="STUDENT" ? "selected" : "" ?>>STUDENT</option>
           <option value="LECTURER" <?= $user["role"]==="LECTURER" ? "selected" : "" ?>>LECTURER</option>
           <option value="ADMIN"    <?= $user["role"]==="ADMIN" ? "selected" : "" ?>>ADMIN</option>
         </select>
+
+        <?php if ($isSelf): ?>
+          <!-- disabled select won't submit -->
+          <input type="hidden" name="role" value="<?= htmlspecialchars((string)$user["role"]) ?>">
+          <p style="margin:0;color:#6b7280;font-size:13px;">
+            You cannot change your own role.
+          </p>
+        <?php endif; ?>
 
         <input type="password" name="new_password" placeholder="New Password (leave blank to keep current)">
 
@@ -140,7 +186,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       </form>
 
       <div style="margin-top:12px;color:#6b7280;font-size:13px;">
-        Passwords are stored securely using <b>password_hash()</b>.
+        Passwords are stored securely. If you reset the password, the user will be required to change it on next login.
       </div>
     </div>
   </main>
