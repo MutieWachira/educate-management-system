@@ -62,6 +62,7 @@ $base = "/education%20system"; // change if your folder name differs
         <li><a href="<?= $base ?>/admin/create_user.php">➕ Create User</a></li>
         <li><a href="<?= $base ?>/admin/manage_departments.php">🏫 Departments</a></li>
         <li><a href="<?= $base ?>/admin/manage_courses.php">📚 Courses</a></li>
+        <li><a href="<?= $base ?>/admin/profile.php">👤 Profile</a></li>
         <li><a href="<?= $base ?>/admin/assign_lecturers.php">🧑‍🏫 Assign Lecturers</a></li>
         <li><a href="<?= $base ?>/admin/enroll_students.php">🧾 Enroll Students</a></li>
       </ul>

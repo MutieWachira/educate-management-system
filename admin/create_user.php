@@ -16,7 +16,7 @@ $base = "/education%20system";
 $msg = "";
 $error = "";
 
-// CSRF (distinction-level)
+// CSRF
 if (empty($_SESSION["csrf"])) {
   $_SESSION["csrf"] = bin2hex(random_bytes(16));
 }
@@ -24,6 +24,7 @@ if (empty($_SESSION["csrf"])) {
 // For displaying after success
 $generatedPassword = "";
 $generatedAdmissionNo = "";
+$generatedStaffNo = "";
 $createdEmail = "";
 $createdRole = "";
 $createdName = "";
@@ -38,12 +39,15 @@ function generatePasswordFromName(string $fullName): string {
   return $first . random_int(1000, 9999);
 }
 
+/**
+ * Admission No = ADM-YYYY-XXXX (unique) for STUDENT
+ */
 function generateAdmissionNo(PDO $pdo): string {
   $year = date("Y");
 
   for ($i = 0; $i < 10; $i++) {
     $adm = "ADM-$year-" . random_int(1000, 9999);
-    $check = $pdo->prepare("SELECT 1 FROM users WHERE admission_no = ? LIMIT 1");
+    $check = $pdo->prepare("SELECT 1 FROM users WHERE admission_no=? LIMIT 1");
     $check->execute([$adm]);
     if (!$check->fetch()) return $adm;
   }
@@ -51,8 +55,25 @@ function generateAdmissionNo(PDO $pdo): string {
   return "ADM-$year-" . random_int(10000, 99999);
 }
 
+/**
+ * Staff No = PREFIX-YYYY-XXXX (unique) for LECTURER/ADMIN
+ * Examples: LEC-2026-4831, ADM-2026-1022
+ */
+function generateStaffNo(PDO $pdo, string $prefix): string {
+  $prefix = strtoupper(trim($prefix));
+  $year = date("Y");
+
+  for ($i = 0; $i < 10; $i++) {
+    $code = $prefix . "-" . $year . "-" . random_int(1000, 9999);
+    $check = $pdo->prepare("SELECT 1 FROM users WHERE staff_no=? LIMIT 1");
+    $check->execute([$code]);
+    if (!$check->fetch()) return $code;
+  }
+
+  return $prefix . "-" . $year . "-" . random_int(10000, 99999);
+}
+
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-  // CSRF validate
   if (!hash_equals($_SESSION["csrf"], (string)($_POST["csrf"] ?? ""))) {
     die("Invalid CSRF token.");
   }
@@ -68,6 +89,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
   } elseif (!in_array($role, ["ADMIN", "LECTURER", "STUDENT"], true)) {
     $error = "Invalid role selected.";
   } else {
+    // email unique
     $check = $pdo->prepare("SELECT userID FROM users WHERE email = ? LIMIT 1");
     $check->execute([$email]);
 
@@ -77,23 +99,30 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       $generatedPassword = generatePasswordFromName($full_name);
       $hashedPassword = password_hash($generatedPassword, PASSWORD_DEFAULT);
 
+      // IDs
       $admissionNo = null;
+      $staffNo = null;
+
       if ($role === "STUDENT") {
         $generatedAdmissionNo = generateAdmissionNo($pdo);
         $admissionNo = $generatedAdmissionNo;
+      } elseif ($role === "LECTURER") {
+        $generatedStaffNo = generateStaffNo($pdo, "LEC");
+        $staffNo = $generatedStaffNo;
+      } elseif ($role === "ADMIN") {
+        $generatedStaffNo = generateStaffNo($pdo, "ADM"); // or "ADMIN"
+        $staffNo = $generatedStaffNo;
       }
 
       try {
         $pdo->beginTransaction();
 
-        // Insert user
         $stmt = $pdo->prepare(
-          "INSERT INTO users (full_name, email, admission_no, password, role, must_change_password)
-           VALUES (?, ?, ?, ?, ?, 1)"
+          "INSERT INTO users (full_name, email, admission_no, staff_no, password, role, must_change_password)
+           VALUES (?, ?, ?, ?, ?, ?, 1)"
         );
-        $stmt->execute([$full_name, $email, $admissionNo, $hashedPassword, $role]);
+        $stmt->execute([$full_name, $email, $admissionNo, $staffNo, $hashedPassword, $role]);
 
-        // Log only AFTER insert succeeds (single log)
         log_activity(
           $pdo,
           (int)$_SESSION["user"]["user_id"],
@@ -103,38 +132,42 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         $pdo->commit();
 
-        // Save display info
+        // Display info
         $createdEmail = $email;
         $createdRole = $role;
         $createdName = $full_name;
 
-        // Send credentials email AFTER successful insert
+        // Email content
         $subject = "Your account has been created";
-        $safeAdmission = ($generatedAdmissionNo !== "")
-          ? "<p><b>Admission No:</b> " . htmlspecialchars($generatedAdmissionNo) . "</p>"
-          : "";
+
+        $idLine = "";
+        if ($role === "STUDENT" && $generatedAdmissionNo !== "") {
+          $idLine = "<p><b>Admission No:</b> " . htmlspecialchars($generatedAdmissionNo) . "</p>";
+        }
+        if (($role === "LECTURER" || $role === "ADMIN") && $generatedStaffNo !== "") {
+          $idLine = "<p><b>Staff No:</b> " . htmlspecialchars($generatedStaffNo) . "</p>";
+        }
 
         $html = "
           <div style='font-family:Arial;line-height:1.6'>
             <h3>Welcome to Academic Collaboration System</h3>
             <p>Your account has been created successfully.</p>
+            $idLine
             <p><b>Email:</b> " . htmlspecialchars($email) . "</p>
             <p><b>Temporary Password:</b> " . htmlspecialchars($generatedPassword) . "</p>
-            $safeAdmission
             <p>Please login and change your password.</p>
           </div>
         ";
 
         $sent = send_email($email, $full_name, $subject, $html);
-        $emailStatus = $sent ? "Credentials email sent." : "⚠️ Account created, but email failed to send.";
+        $emailStatus = $sent ? "✅ Credentials email sent." : "⚠️ Account created, but email failed to send.";
 
         $msg = "User created successfully!";
         $_POST = [];
 
       } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
-        $error = "Failed to create user. Please try again. Error: " . $e->getMessage();
-        //error_log($e->getMessage());
+        $error = "Failed to create user. Error: " . $e->getMessage();
       }
     }
   }
@@ -180,7 +213,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       <div class="header">
         <div>
           <h2>Create User</h2>
-          <p>Creates a new Admin/Lecturer/Student. Password is generated and stored securely (hashed).</p>
+          <p>Student gets Admission No. Lecturer/Admin get Staff No. Password is generated & hashed.</p>
         </div>
       </div>
 
@@ -196,9 +229,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
           <p style="margin:4px 0;"><b>Role:</b> <?= htmlspecialchars($createdRole) ?></p>
 
           <?php if ($generatedAdmissionNo !== ""): ?>
-            <p style="margin:8px 0 4px;"><b>Admission Number:</b>
+            <p style="margin:8px 0 4px;"><b>Admission No:</b>
               <span style="font-family:monospace;background:#d1fae5;padding:4px 8px;border-radius:8px;">
                 <?= htmlspecialchars($generatedAdmissionNo) ?>
+              </span>
+            </p>
+          <?php endif; ?>
+
+          <?php if ($generatedStaffNo !== ""): ?>
+            <p style="margin:8px 0 4px;"><b>Staff No:</b>
+              <span style="font-family:monospace;background:#d1fae5;padding:4px 8px;border-radius:8px;">
+                <?= htmlspecialchars($generatedStaffNo) ?>
               </span>
             </p>
           <?php endif; ?>
@@ -242,7 +283,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
       <div style="margin-top:12px;color:#6b7280;font-size:13px;">
         <b>Password rule:</b> First name + 4 digits (e.g., John4821).<br>
-        <b>Admission rule:</b> Students get ADM-YYYY-XXXX (e.g., ADM-2026-4831).
+        <b>Student ID:</b> ADM-YYYY-XXXX • <b>Staff ID:</b> LEC-YYYY-XXXX / ADM-YYYY-XXXX
       </div>
     </div>
   </main>

@@ -17,11 +17,12 @@ $q = trim($_GET["q"] ?? "");
 $role = trim($_GET["role"] ?? "");
 
 // Build query (safe prepared statements)
-$sql = "SELECT userID, full_name, email, role, admission_no FROM users WHERE 1=1";
+$sql = "SELECT userID, full_name, email, role, admission_no, staff_no FROM users WHERE 1=1";
 $params = [];
 
 if ($q !== "") {
-  $sql .= " AND (full_name LIKE ? OR email LIKE ? OR admission_no LIKE ?)";
+  $sql .= " AND (full_name LIKE ? OR email LIKE ? OR admission_no LIKE ? OR staff_no LIKE ?)";
+  $params[] = "%$q%";
   $params[] = "%$q%";
   $params[] = "%$q%";
   $params[] = "%$q%";

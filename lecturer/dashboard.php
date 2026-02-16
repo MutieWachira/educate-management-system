@@ -52,6 +52,7 @@ $courses = $stmt->fetchAll();
       <h4>Navigation</h4>
       <ul class="nav">
         <li><a class="active" href="<?= $base ?>/lecturer/dashboard.php">🏠 Dashboard</a></li>
+                <li><a href="<?= $base ?>/lecturer/profile.php">👤 Profile</a></li>
         <li><a href="<?= $base ?>/auth/logout.php">🚪 Logout</a></li>
       </ul>
     </aside>

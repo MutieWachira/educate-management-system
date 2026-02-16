@@ -1,10 +1,11 @@
 Create database ems_db
 
-//Users table
+--Users table
 create table users(
     userID int(10) PRIMARY KEY AUTO_INCREMENT,
     full_name varchar(50) NOT NULL,
     admission_no VARCHAR(30) NULL,
+    staff_no VARCHAR(20) NULL,
     email varchar(255) NOT NULL,
     password varchar(255) NOT NULL,
     role ENUM('ADMIN', 'LECTURER', 'STUDENT') NOT NULL,
@@ -13,17 +14,20 @@ create table users(
 );
 
 CREATE UNIQUE INDEX uniq_users_admission_no ON users(admission_no);
+CREATE UNIQUE INDEX uq_users_staff_no ON users(staff_no);
 
 INSERT INTO `users` (`userID`, `full_name`, `email`, `password`, `role`, `created_at`) VALUES 
 (NULL, 'admin', 'admin@ems.com', '123456', 'ADMIN', current_timestamp()), 
 (NULL, 'student', 'student@ems.com', '123456', 'STUDENT', current_timestamp());
 (NULL, 'lecturer', 'lecturer@ems.com', '123456', 'LECTURER', current_timestamp());
 
+--department table
 CREATE TABLE departments (
   department_id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL UNIQUE
 );
 
+--course table
 CREATE TABLE courses (
   course_id INT AUTO_INCREMENT PRIMARY KEY,
   course_code VARCHAR(30) NOT NULL UNIQUE,
@@ -36,6 +40,7 @@ CREATE TABLE courses (
     ON UPDATE CASCADE
 );
 
+--lecturer courses
 CREATE TABLE lecturer_courses (
   lecturer_course_id INT AUTO_INCREMENT PRIMARY KEY,
   lecturer_id INT NOT NULL,
@@ -50,6 +55,7 @@ CREATE TABLE lecturer_courses (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+--enrollments table
 CREATE TABLE enrollments (
   enrollment_id INT AUTO_INCREMENT PRIMARY KEY,
   student_id INT NOT NULL,
@@ -64,6 +70,7 @@ CREATE TABLE enrollments (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+--uploded materials
 CREATE TABLE materials (
   material_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -79,6 +86,7 @@ CREATE TABLE materials (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+--announcements table
 CREATE TABLE announcements (
   announcement_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -95,6 +103,7 @@ CREATE TABLE announcements (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+--forum threads
 CREATE TABLE forum_threads (
   thread_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -110,6 +119,7 @@ CREATE TABLE forum_threads (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+--forum replies
 CREATE TABLE forum_replies (
   reply_id INT AUTO_INCREMENT PRIMARY KEY,
   thread_id INT NOT NULL,
@@ -124,6 +134,7 @@ CREATE TABLE forum_replies (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+--study group
 CREATE TABLE study_groups (
   group_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -139,6 +150,7 @@ CREATE TABLE study_groups (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+--study group members
 CREATE TABLE study_group_members (
   member_id INT AUTO_INCREMENT PRIMARY KEY,
   group_id INT NOT NULL,
@@ -181,3 +193,56 @@ CREATE TABLE activity_logs (
     REFERENCES users(userID) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE TABLE grades (
+  grade_id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  student_id INT NOT NULL,
+  lecturer_id INT NULL,
+  item_name VARCHAR(120) NOT NULL,   -- e.g. CAT 1, Assignment 2, Exam
+  score DECIMAL(5,2) NOT NULL,
+  max_score DECIMAL(6,2) NOT NULL DEFAULT 100,
+  out_of DECIMAL(5,2) NOT NULL DEFAULT 100,
+  remarks VARCHAR(255) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+  CONSTRAINT fk_grade_course FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+  CONSTRAINT fk_grade_student FOREIGN KEY (student_id) REFERENCES users(userID) ON DELETE CASCADE
+);
+CREATE INDEX idx_grades_student_course ON grades(student_id, course_id);
+
+-- 1) Assignments table
+CREATE TABLE assignments (
+  assignment_id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  created_by INT NOT NULL,
+  title VARCHAR(150) NOT NULL,
+  description TEXT NOT NULL,
+  due_date DATE NULL,
+  max_score INT NOT NULL DEFAULT 100,
+  file_path VARCHAR(255) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+  CONSTRAINT fk_assign_course FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+  CONSTRAINT fk_assign_lecturer FOREIGN KEY (created_by) REFERENCES users(userID) ON DELETE CASCADE
+);
+
+-- 2) Submissions table
+CREATE TABLE submissions (
+  submission_id INT AUTO_INCREMENT PRIMARY KEY,
+  assignment_id INT NOT NULL,
+  student_id INT NOT NULL,
+  file_path VARCHAR(255) NULL,
+  text_answer TEXT NULL,
+  submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+  score DECIMAL(8,2) NULL,
+  feedback TEXT NULL,
+  graded_at TIMESTAMP NULL,
+  graded_by INT NULL,
+
+  UNIQUE KEY uq_one_submission (assignment_id, student_id),
+
+  CONSTRAINT fk_sub_assign FOREIGN KEY (assignment_id) REFERENCES assignments(assignment_id) ON DELETE CASCADE,
+  CONSTRAINT fk_sub_student FOREIGN KEY (student_id) REFERENCES users(userID) ON DELETE CASCADE,
+  CONSTRAINT fk_sub_grader FOREIGN KEY (graded_by) REFERENCES users(userID) ON DELETE SET NULL
+);

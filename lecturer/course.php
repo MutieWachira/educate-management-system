@@ -89,6 +89,11 @@ if (!$course) die("Course not found.");
           👥 Study Groups
           <div class="small">See groups and members count</div>
         </a>
+
+        <a class="action-btn" href="<?= $base ?>/lecturer/assignments.php?course_id=<?= $courseId ?>">
+          � Assignments
+          <div class="small">Create and manage assignments</div>
+        </a>
       </div>
 
       <div class="footer-row">

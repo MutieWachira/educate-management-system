@@ -171,10 +171,25 @@ $groups = $stmt->fetchAll();
   <link rel="stylesheet" href="<?= $base ?>/assets/css/student.css">
 </head>
 <body>
-<div class="topbar"> ... </div>
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-badge">AC</div>
+    <div>Academic Collaboration System<br><span style="font-size:12px;opacity:.85;">Student Portal</span></div>
+  </div>
+  <div class="user">
+    <div class="pill"><?= htmlspecialchars($_SESSION["user"]["full_name"]) ?> • STUDENT</div>
+  </div>
+</div>
 
 <div class="layout">
-  <aside class="sidebar"> ... </aside>
+  <aside class="sidebar">
+    <h4>Navigation</h4>
+    <ul class="nav">
+      <li><a href="<?= $base ?>/student/dashboard.php">🏠 Dashboard</a></li>
+      <li><a class="active" href="<?= $base ?>/student/study_groups.php?course_id=<?= $courseId ?>">📚 Study Groups</a></li>
+      <li><a href="<?= $base ?>/auth/logout.php">🚪 Logout</a></li>
+    </ul>
+  </aside>
 
   <main class="content">
     <div class="card">
