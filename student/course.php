@@ -87,14 +87,19 @@ if (!$course) die("Course not found.");
             <div class="small">Ask questions and reply</div>
           </a>
 
+          <a class="action-btn" href="<?= $base ?>/student/grades.php?course_id=<?= $courseId ?>">
+            📊 Grades
+            <div class="small">View released grades</div>
+          </a>
+
           <a class="action-btn" href="<?= $base ?>/student/study_groups.php?course_id=<?= $courseId ?>">
             👥 Study Groups
             <div class="small">Create and join study groups</div>
           </a>
-<a class="action-btn" href="<?= $base ?>/student/assignment.php?course_id=<?= $courseId ?>">
-  📝 Assignments
-  <div class="small">View and submit assignments</div>
-</a>
+          <a class="action-btn" href="<?= $base ?>/student/assignment.php?course_id=<?= $courseId ?>">
+            📝 Assignments
+            <div class="small">View and submit assignments</div>
+          </a>
 
         </div>
 

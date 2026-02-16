@@ -94,6 +94,11 @@ if (!$course) die("Course not found.");
           � Assignments
           <div class="small">Create and manage assignments</div>
         </a>
+
+        <a class="action-btn" href="<?= $base ?>/lecturer/gradebook.php?course_id=<?= $courseId ?>">📊 Gradebook</a>
+
+        <a class="action-btn" href="<?= $base ?>/lecturer/grade_categories.php?course_id=<?= $courseId ?>">⚖ Weights</a>
+
       </div>
 
       <div class="footer-row">

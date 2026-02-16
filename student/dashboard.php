@@ -173,7 +173,6 @@ $recentAnnouncements = $annStmt->fetchAll();
     <ul class="nav">
       <li><a class="active" href="<?= $base ?>/student/dashboard.php">🏠 Dashboard</a></li>
       <li><a href="<?= $base ?>/student/course_hub.php">📚 Course Hub</a></li>
-      <li><a href="<?= $base ?>/student/grades.php">📈 Grades</a></li>
       <li><a href="<?= $base ?>/student/study_groups.php">👥 Study Groups</a></li>
       <li><a href="<?= $base ?>/student/calendar.php">🗓 Calendar</a></li>
               <li><a href="<?= $base ?>/student/profile.php">👤 Profile</a></li>

@@ -1,8 +1,8 @@
 <?php
 declare(strict_types=1);
 
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
+ini_set('display_errors','1');
+ini_set('display_startup_errors','1');
 error_reporting(E_ALL);
 
 require_once __DIR__ . "/../includes/auth_guard.php";
@@ -18,107 +18,118 @@ $assignmentId = (int)($_GET["assignment_id"] ?? 0);
 
 if ($courseId <= 0 || $assignmentId <= 0) die("Invalid request.");
 
+// Ensure assigned
 $check = $pdo->prepare("SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=? LIMIT 1");
 $check->execute([$lecturerId, $courseId]);
 if (!$check->fetch()) { http_response_code(403); die("Not allowed."); }
 
-$aq = $pdo->prepare("
-  SELECT a.assignment_id, a.title, a.max_score, a.due_date, c.course_code
-  FROM assignments a
-  INNER JOIN courses c ON c.course_id = a.course_id
-  WHERE a.assignment_id=? AND a.course_id=? AND a.created_by=? LIMIT 1
-");
-$aq->execute([$assignmentId, $courseId, $lecturerId]);
-$assignment = $aq->fetch();
-if (!$assignment) die("Assignment not found.");
+// CSRF
+if (empty($_SESSION["csrf"])) $_SESSION["csrf"] = bin2hex(random_bytes(16));
 
 $msg = "";
 $error = "";
 
-if (($_GET["ok"] ?? "") === "1") $msg = "Grade saved and student notified.";
+// Show messages after redirects
+if (($_GET["ok"] ?? "") === "published") $msg = "Grades published. Students can now see scores.";
+if (($_GET["ok"] ?? "") === "hidden")    $msg = "Grades hidden. Students cannot see scores.";
+if (($_GET["ok"] ?? "") === "graded")    $msg = "Saved grade.";
 
+// Fetch assignment
+$aq = $pdo->prepare("
+  SELECT assignment_id, title, due_date, max_score, grades_published
+  FROM assignments
+  WHERE assignment_id=? AND course_id=? AND created_by=?
+  LIMIT 1
+");
+$aq->execute([$assignmentId, $courseId, $lecturerId]);
+$assignment = $aq->fetch();
+if (!$assignment) die("Assignment not found or not yours.");
+
+$published = (int)$assignment["grades_published"];
+
+// POST actions
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-  $submissionId = (int)($_POST["submission_id"] ?? 0);
-  $score = trim((string)($_POST["score"] ?? ""));
-  $feedback = trim((string)($_POST["feedback"] ?? ""));
+  if (!hash_equals($_SESSION["csrf"], (string)($_POST["csrf"] ?? ""))) die("Invalid CSRF token.");
 
-  if ($submissionId <= 0) {
-    $error = "Invalid submission.";
-  } elseif ($score === "" || !is_numeric($score)) {
-    $error = "Score must be a number.";
-  } else {
-    $scoreVal = (float)$score;
-    $max = (float)$assignment["max_score"];
-    if ($scoreVal < 0 || $scoreVal > $max) {
-      $error = "Score must be between 0 and {$assignment["max_score"]}.";
+  $action = (string)($_POST["action"] ?? "");
+
+  // ✅ Publish / Unpublish
+  if ($action === "publish" || $action === "unpublish") {
+    $val = ($action === "publish") ? 1 : 0;
+
+    $upd = $pdo->prepare("
+      UPDATE assignments
+      SET grades_published=?
+      WHERE assignment_id=? AND course_id=? AND created_by=?
+      LIMIT 1
+    ");
+    $upd->execute([$val, $assignmentId, $courseId, $lecturerId]);
+
+    log_activity($pdo, $lecturerId, "TOGGLE_GRADES", "Assignment: $assignmentId | Published: $val");
+
+    $ok = $val ? "published" : "hidden";
+    header("Location: {$base}/lecturer/grade_submissions.php?course_id={$courseId}&assignment_id={$assignmentId}&ok={$ok}");
+    exit;
+  }
+
+  // ✅ Grade one submission (SECURE: ensure submission belongs to this assignment)
+  if ($action === "grade") {
+    $submissionId = (int)($_POST["submission_id"] ?? 0);
+    $score = trim((string)($_POST["score"] ?? ""));
+    $feedback = trim((string)($_POST["feedback"] ?? ""));
+
+    if ($submissionId <= 0) {
+      $error = "Invalid submission.";
+    } elseif ($score === "" || !is_numeric($score)) {
+      $error = "Score must be a number.";
     } else {
-      try {
-        $pdo->beginTransaction();
+      $scoreVal = (float)$score;
+      $max = (float)$assignment["max_score"];
 
-        // Get submission + student
-        $sq = $pdo->prepare("
-          SELECT s.submission_id, s.student_id, u.full_name, u.email, u.admission_no
-          FROM submissions s
-          INNER JOIN users u ON u.userID = s.student_id
-          WHERE s.submission_id=? AND s.assignment_id=? LIMIT 1
+      if ($scoreVal < 0 || $scoreVal > $max) {
+        $error = "Score must be between 0 and $max.";
+      } else {
+        // ✅ extra validation: only update rows under THIS assignment
+        $upd = $pdo->prepare("
+          UPDATE submissions
+          SET score=?, feedback=?, graded_at=NOW(), graded_by=?
+          WHERE submission_id=? AND assignment_id=?
+          LIMIT 1
         ");
-        $sq->execute([$submissionId, $assignmentId]);
-        $sub = $sq->fetch();
-        if (!$sub) {
-          $pdo->rollBack();
-          $error = "Submission not found.";
-        } else {
-          $upd = $pdo->prepare("
-            UPDATE submissions
-            SET score=?, feedback=?, graded_at=NOW(), graded_by=?
-            WHERE submission_id=? LIMIT 1
-          ");
-          $upd->execute([$scoreVal, ($feedback === "" ? null : $feedback), $lecturerId, $submissionId]);
+        $upd->execute([
+          $scoreVal,
+          ($feedback === "" ? null : $feedback),
+          $lecturerId,
+          $submissionId,
+          $assignmentId
+        ]);
 
-          // Notify student
-          $studentId = (int)$sub["student_id"];
-          $link = "{$base}/student/grades.php?course_id={$courseId}";
-          $notifTitle = "Grade posted - " . (string)$assignment["course_code"];
-          $notifMessage =
-            "Assignment: " . (string)$assignment["title"] . "\n" .
-            "Score: {$scoreVal} / " . (string)$assignment["max_score"] . "\n" .
-            (($feedback !== "") ? ("Feedback:\n{$feedback}") : "Feedback: -");
+        log_activity($pdo, $lecturerId, "GRADE_SUBMISSION", "Sub: $submissionId | Score: $scoreVal/$max");
 
-          notify_user(
-            $pdo,
-            $studentId,
-            "GRADE_POSTED",
-            $notifTitle,
-            $notifMessage,
-            $link,
-            true
-          );
-
-          log_activity($pdo, $lecturerId, "GRADE_SUBMISSION", "Assignment: $assignmentId | Submission: $submissionId | Score: $scoreVal");
-
-          $pdo->commit();
-
-          header("Location: {$base}/lecturer/grade_submissions.php?course_id={$courseId}&assignment_id={$assignmentId}&ok=1");
-          exit;
-        }
-      } catch (Throwable $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        $error = "Failed to save grade.";
+        header("Location: {$base}/lecturer/grade_submissions.php?course_id={$courseId}&assignment_id={$assignmentId}&ok=graded");
+        exit;
       }
     }
   }
 }
 
-$list = $pdo->prepare("
+// List submissions (include student admission_no)
+$sql = "
   SELECT s.submission_id, s.file_path, s.text_answer, s.submitted_at, s.score, s.feedback, s.graded_at,
          u.full_name, u.admission_no
   FROM submissions s
   INNER JOIN users u ON u.userID = s.student_id
   WHERE s.assignment_id=?
   ORDER BY s.submitted_at DESC
-");
-$list->execute([$assignmentId]);
-$subs = $list->fetchAll();
+";
+$stmt = $pdo->prepare($sql);
+$stmt->execute([$assignmentId]);
+$subs = $stmt->fetchAll();
+
+// Refresh published status (in case toggled)
+$aq->execute([$assignmentId, $courseId, $lecturerId]);
+$assignment = $aq->fetch();
+$published = (int)$assignment["grades_published"];
 ?>
 <!doctype html>
 <html lang="en">
@@ -143,7 +154,7 @@ $subs = $list->fetchAll();
     <h4>Navigation</h4>
     <ul class="nav">
       <li><a href="<?= $base ?>/lecturer/dashboard.php">🏠 Dashboard</a></li>
-      <li><a class="active" href="#">✅ Grade</a></li>
+      <li><a class="active" href="#">✅ Grade Submissions</a></li>
       <li><a href="<?= $base ?>/auth/logout.php">🚪 Logout</a></li>
     </ul>
   </aside>
@@ -152,58 +163,92 @@ $subs = $list->fetchAll();
     <div class="card">
       <div class="header">
         <div>
-          <h2>Grade — <?= htmlspecialchars((string)$assignment["course_code"]) ?></h2>
-          <p><?= htmlspecialchars((string)$assignment["title"]) ?> • Max: <?= (int)$assignment["max_score"] ?> • Due: <?= htmlspecialchars((string)($assignment["due_date"] ?? "-")) ?></p>
+          <h2>Grade: <?= htmlspecialchars((string)$assignment["title"]) ?></h2>
+          <p>Max Score: <b><?= (int)$assignment["max_score"] ?></b> • Due: <?= htmlspecialchars((string)($assignment["due_date"] ?? "-")) ?></p>
+          <p style="font-size:13px;color:#6b7280;">
+            Status:
+            <?= $published ? "<b style='color:green;'>Published</b>" : "<b style='color:#b91c1c;'>Hidden</b>" ?>
+          </p>
         </div>
-        <div>
-          <a class="btn" href="<?= $base ?>/lecturer/assignments.php?course_id=<?= $courseId ?>">← Back</a>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a class="btn" href="<?= $base ?>/lecturer/gradebook.php?course_id=<?= $courseId ?>">📊 Gradebook</a>
+          <a class="btn" href="<?= $base ?>/lecturer/grade_categories.php?course_id=<?= $courseId ?>">⚖ Weights</a>
+          <a class="btn" href="<?= $base ?>/lecturer/course.php?course_id=<?= $courseId ?>">← Back</a>
         </div>
       </div>
 
-      <?php if ($msg): ?><p style="color:green;font-weight:800;"><?= htmlspecialchars($msg) ?></p><?php endif; ?>
-      <?php if ($error): ?><p style="color:#b91c1c;font-weight:800;"><?= htmlspecialchars($error) ?></p><?php endif; ?>
+      <?php if($msg): ?><p style="color:green;font-weight:800;"><?= htmlspecialchars($msg) ?></p><?php endif; ?>
+      <?php if($error): ?><p style="color:#b91c1c;font-weight:800;"><?= htmlspecialchars($error) ?></p><?php endif; ?>
+
+      <form method="post" style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
+        <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf"]) ?>">
+        <?php if (!$published): ?>
+          <input type="hidden" name="action" value="publish">
+          <button class="btn" type="submit">Publish Grades</button>
+        <?php else: ?>
+          <input type="hidden" name="action" value="unpublish">
+          <button class="btn" type="submit" style="background:rgba(239,68,68,0.12);color:#b91c1c;border-color:rgba(239,68,68,0.25);">Hide Grades</button>
+        <?php endif; ?>
+      </form>
 
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>Student</th>
-              <th>Adm No</th>
               <th>Submitted</th>
               <th>Work</th>
               <th>Score</th>
-              <th>Grade</th>
+              <th>Feedback</th>
+              <th>Save</th>
             </tr>
           </thead>
           <tbody>
-          <?php if (!$subs): ?>
+          <?php if(!$subs): ?>
             <tr><td colspan="6">No submissions yet.</td></tr>
-          <?php else: foreach ($subs as $s): ?>
+          <?php else: foreach($subs as $s): ?>
             <tr>
-              <td><?= htmlspecialchars((string)$s["full_name"]) ?></td>
-              <td><?= htmlspecialchars((string)($s["admission_no"] ?? "-")) ?></td>
+              <td>
+                <b><?= htmlspecialchars((string)$s["full_name"]) ?></b><br>
+                <span style="color:#6b7280;font-size:13px;"><?= htmlspecialchars((string)($s["admission_no"] ?? "N/A")) ?></span>
+              </td>
+
               <td><?= htmlspecialchars((string)$s["submitted_at"]) ?></td>
+
               <td>
-                <?php if ($s["file_path"]): ?>
-                  <a class="action-link" target="_blank" href="<?= $base ?>/<?= htmlspecialchars((string)$s["file_path"]) ?>">Open file</a>
-                <?php else: ?>
-                  -
+                <?php if(!empty($s["file_path"])): ?>
+                  <a class="action-link" href="<?= $base ?>/<?= htmlspecialchars((string)$s["file_path"]) ?>" target="_blank">Open File</a>
                 <?php endif; ?>
-                <?php if ($s["text_answer"]): ?>
-                  <div style="margin-top:6px;color:#6b7280;"><?= nl2br(htmlspecialchars((string)$s["text_answer"])) ?></div>
+                <?php if(!empty($s["text_answer"])): ?>
+                  <div style="margin-top:6px;color:#6b7280;">
+                    <?= nl2br(htmlspecialchars((string)$s["text_answer"])) ?>
+                  </div>
                 <?php endif; ?>
               </td>
+
               <td>
-                <?= ($s["score"] === null) ? "-" : htmlspecialchars((string)$s["score"]) ?>
+                <?= htmlspecialchars((string)($s["score"] ?? "-")) ?> / <?= (int)$assignment["max_score"] ?>
               </td>
-              <td style="min-width:260px;">
+
+              <td><?= nl2br(htmlspecialchars((string)($s["feedback"] ?? ""))) ?></td>
+
+              <td>
                 <form method="post" style="display:grid;gap:8px;">
+                  <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf"]) ?>">
+                  <input type="hidden" name="action" value="grade">
                   <input type="hidden" name="submission_id" value="<?= (int)$s["submission_id"] ?>">
-                  <input type="number" name="score" step="0.01" min="0" max="<?= (int)$assignment["max_score"] ?>"
-                         placeholder="Score / <?= (int)$assignment["max_score"] ?>" required
-                         value="<?= $s["score"] === null ? "" : htmlspecialchars((string)$s["score"]) ?>">
-                  <textarea name="feedback" placeholder="Feedback (optional)"
-                    style="width:100%;min-height:70px;padding:10px;border-radius:12px;border:1px solid #e5e7eb;"><?= htmlspecialchars((string)($s["feedback"] ?? "")) ?></textarea>
+
+                  <input type="number"
+                         step="0.01"
+                         name="score"
+                         placeholder="Score"
+                         required
+                         value="<?= htmlspecialchars((string)($s["score"] ?? "")) ?>">
+
+                  <textarea name="feedback"
+                            placeholder="Feedback (optional)"
+                            style="min-height:70px;border-radius:12px;border:1px solid #e5e7eb;padding:10px;"><?= htmlspecialchars((string)($s["feedback"] ?? "")) ?></textarea>
+
                   <button class="btn" type="submit">Save</button>
                 </form>
               </td>
@@ -216,6 +261,5 @@ $subs = $list->fetchAll();
     </div>
   </main>
 </div>
-
 </body>
 </html>

@@ -11,98 +11,114 @@ require_once __DIR__ . "/../config/db.php";
 
 $base = "/education%20system";
 $studentId = (int)$_SESSION["user"]["user_id"];
+$courseId  = (int)($_GET["course_id"] ?? 0);
+if ($courseId <= 0) die("Invalid course.");
 
-// Get student's enrolled courses (for dropdown)
-$cstmt = $pdo->prepare("
-  SELECT c.course_id, c.course_code, c.title
-  FROM enrollments e
-  INNER JOIN courses c ON c.course_id = e.course_id
-  WHERE e.student_id=?
-  ORDER BY c.course_code ASC
-");
-$cstmt->execute([$studentId]);
-$courses = $cstmt->fetchAll();
+// Ensure enrolled
+$check = $pdo->prepare("SELECT 1 FROM enrollments WHERE student_id=? AND course_id=? LIMIT 1");
+$check->execute([$studentId, $courseId]);
+if (!$check->fetch()) { http_response_code(403); die("Not enrolled."); }
 
-$courseId = (int)($_GET["course_id"] ?? 0);
+// Course info
+$cq = $pdo->prepare("SELECT course_code, title FROM courses WHERE course_id=? LIMIT 1");
+$cq->execute([$courseId]);
+$course = $cq->fetch();
 
-// If course selected, ensure student enrolled
-if ($courseId > 0) {
-  $chk = $pdo->prepare("SELECT 1 FROM enrollments WHERE student_id=? AND course_id=? LIMIT 1");
-  $chk->execute([$studentId, $courseId]);
-  if (!$chk->fetch()) {
-    http_response_code(403);
-    die("Not enrolled in this course.");
+// Categories
+$cats = $pdo->prepare("SELECT category_id, name, weight FROM grade_categories WHERE course_id=?");
+$cats->execute([$courseId]);
+$categories = $cats->fetchAll();
+
+$catWeight = [];
+$totalWeight = 0.0;
+foreach ($categories as $c) {
+  $catWeight[(int)$c["category_id"]] = (float)$c["weight"];
+  $totalWeight += (float)$c["weight"];
+}
+
+// Assignments + my submission scores
+$sql = "
+  SELECT a.assignment_id, a.title, a.max_score, a.due_date, a.grades_published, a.category_id,
+         s.score, s.feedback, s.submitted_at
+  FROM assignments a
+  LEFT JOIN submissions s
+    ON s.assignment_id = a.assignment_id AND s.student_id = ?
+  WHERE a.course_id=?
+  ORDER BY a.assignment_id DESC
+";
+$stmt = $pdo->prepare($sql);
+$stmt->execute([$studentId, $courseId]);
+$rows = $stmt->fetchAll();
+
+function letter_grade(float $p): string {
+  if ($p >= 70) return "A";
+  if ($p >= 60) return "B";
+  if ($p >= 50) return "C";
+  if ($p >= 40) return "D";
+  return "E";
+}
+
+// Weighted total
+$weightedTotal = 0.0;
+$weightUsed = 0.0;
+
+foreach ($rows as $r) {
+  $published = (int)($r["grades_published"] ?? 0);
+  if ($published !== 1) continue;         // hidden grades do NOT count yet
+
+  $score = $r["score"];
+  $max = (float)$r["max_score"];
+  if ($score === null || $max <= 0) continue; // not graded yet
+
+  $pct = ((float)$score / $max); // 0..1
+
+  $catId = (int)($r["category_id"] ?? 0);
+  $w = $catId && isset($catWeight[$catId]) ? $catWeight[$catId] : 0.0;
+
+  // If no categories set, we fallback to "simple average" later
+  if ($totalWeight > 0 && $w > 0) {
+    $weightedTotal += ($pct * $w);
+    $weightUsed += $w;
   }
 }
 
-// Fetch grades (all or per course)
-$params = [$studentId];
-$where = "g.student_id=?";
-if ($courseId > 0) {
-  $where .= " AND g.course_id=?";
-  $params[] = $courseId;
-}
+$finalPct = 0.0;
 
-$stmt = $pdo->prepare("
-  SELECT
-    g.grade_id, g.course_id, g.item_name, g.score, g.max_score, g.remarks, g.created_at,
-    c.course_code, c.title AS course_title
-  FROM grades g
-  INNER JOIN courses c ON c.course_id = g.course_id
-  WHERE $where
-  ORDER BY c.course_code ASC, g.created_at DESC
-");
-$stmt->execute($params);
-$grades = $stmt->fetchAll();
-
-// Summary calculations
-$totalPct = 0.0;
-$count = 0;
-
-foreach ($grades as $g) {
-  $max = (float)$g["max_score"];
-  $sc  = (float)$g["score"];
-  if ($max > 0) {
-    $totalPct += ($sc / $max) * 100.0;
+// If weights exist and used
+if ($totalWeight > 0 && $weightUsed > 0) {
+  // normalize by weight used (if you haven't graded everything yet)
+  $finalPct = ($weightedTotal / $weightUsed) * 100.0;
+} else {
+  // fallback: simple average of published graded items
+  $sumPct = 0.0; $count = 0;
+  foreach ($rows as $r) {
+    if ((int)($r["grades_published"] ?? 0) !== 1) continue;
+    if ($r["score"] === null) continue;
+    $max = (float)$r["max_score"];
+    if ($max <= 0) continue;
+    $sumPct += (((float)$r["score"] / $max) * 100.0);
     $count++;
   }
+  $finalPct = $count > 0 ? ($sumPct / $count) : 0.0;
 }
-$avgPct = $count ? round($totalPct / $count, 2) : null;
 
-function gradeBadge(float $pct): string {
-  if ($pct >= 70) return "✅ Distinction";
-  if ($pct >= 60) return "🟦 Credit";
-  if ($pct >= 50) return "🟨 Pass";
-  return "🟥 Improve";
-}
+$finalLetter = letter_grade($finalPct);
 ?>
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>My Grades</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Grades</title>
   <link rel="stylesheet" href="<?= $base ?>/assets/css/student.css">
-
-  <style>
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;}
-    .input{padding:12px 14px;border:1px solid #e5e7eb;border-radius:12px;outline:none;min-width:220px;}
-    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#f3f4f6;font-size:12px;font-weight:900;color:#111827;}
-    .muted{color:#6b7280;font-size:13px;margin-top:8px;}
-    .hidden{display:none !important;}
-    table td{vertical-align:top;}
-  </style>
 </head>
 <body>
-
 <div class="topbar">
   <div class="brand">
     <div class="brand-badge">AC</div>
     <div>Academic Collaboration System<br><span style="font-size:12px;opacity:.85;">Student Portal</span></div>
   </div>
-  <div class="user">
-    <div class="pill"><?= htmlspecialchars($_SESSION["user"]["full_name"]) ?> • STUDENT</div>
-  </div>
+  <div class="user"><div class="pill"><?= htmlspecialchars($_SESSION["user"]["full_name"]) ?> • STUDENT</div></div>
 </div>
 
 <div class="layout">
@@ -110,7 +126,7 @@ function gradeBadge(float $pct): string {
     <h4>Navigation</h4>
     <ul class="nav">
       <li><a href="<?= $base ?>/student/dashboard.php">🏠 Dashboard</a></li>
-      <li><a class="active" href="<?= $base ?>/student/grades.php">📈 Grades</a></li>
+      <li><a class="active" href="#">📊 Grades</a></li>
       <li><a href="<?= $base ?>/auth/logout.php">🚪 Logout</a></li>
     </ul>
   </aside>
@@ -119,121 +135,72 @@ function gradeBadge(float $pct): string {
     <div class="card">
       <div class="header">
         <div>
-          <h2>My Grades</h2>
-          <p>View your CATs, assignments, and exams.</p>
-
-          <div class="row">
-            <form method="get" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-              <select class="input" name="course_id" onchange="this.form.submit()">
-                <option value="0">All My Courses</option>
-                <?php foreach ($courses as $c): ?>
-                  <option value="<?= (int)$c["course_id"] ?>" <?= $courseId===(int)$c["course_id"] ? "selected" : "" ?>>
-                    <?= htmlspecialchars($c["course_code"]) ?> — <?= htmlspecialchars($c["title"]) ?>
-                  </option>
-                <?php endforeach; ?>
-              </select>
-            </form>
-
-            <input id="search" class="input" type="text" placeholder="Search grade item or course..." autocomplete="off">
-            <span class="pill" id="countPill">0</span>
-            <a class="action-link" href="<?= $base ?>/student/dashboard.php">← Back</a>
-          </div>
-
-          <?php if ($avgPct !== null): ?>
-            <div class="muted">
-              <b>Average:</b> <?= htmlspecialchars((string)$avgPct) ?>% • <?= gradeBadge((float)$avgPct) ?>
-            </div>
-          <?php else: ?>
-            <div class="muted">No grades found yet.</div>
-          <?php endif; ?>
+          <h2>Grades — <?= htmlspecialchars((string)($course["course_code"] ?? "")) ?></h2>
+          <p><?= htmlspecialchars((string)($course["title"] ?? "")) ?></p>
         </div>
       </div>
 
-      <div class="table-wrap" style="margin-top:12px;">
+      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin:10px 0;">
+        <b>Current Overall:</b>
+        <?= number_format($finalPct, 2) ?>% • <b>Grade: <?= htmlspecialchars($finalLetter) ?></b>
+        <div style="color:#6b7280;font-size:13px;margin-top:6px;">
+          Only <b>published</b> grades are included.
+        </div>
+      </div>
+
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Course</th>
-              <th>Item</th>
+              <th>Assessment</th>
+              <th>Due</th>
+              <th>Status</th>
               <th>Score</th>
-              <th>%</th>
-              <th>Remarks</th>
-              <th>Date</th>
+              <th>Feedback</th>
             </tr>
           </thead>
-          <tbody id="tbody">
-            <?php if (!$grades): ?>
-              <tr><td colspan="6">No grades available.</td></tr>
-            <?php else: ?>
-              <?php foreach ($grades as $g): ?>
+          <tbody>
+          <?php if(!$rows): ?>
+            <tr><td colspan="5">No assignments yet.</td></tr>
+          <?php else: foreach($rows as $r): ?>
+            <?php $published = (int)($r["grades_published"] ?? 0); ?>
+            <tr>
+              <td><b><?= htmlspecialchars((string)$r["title"]) ?></b></td>
+              <td><?= htmlspecialchars((string)($r["due_date"] ?? "-")) ?></td>
+              <td>
                 <?php
-                  $max = (float)$g["max_score"];
-                  $sc  = (float)$g["score"];
-                  $pct = $max > 0 ? round(($sc/$max)*100, 2) : 0.0;
-
-                  $searchKey = strtolower(
-                    trim(
-                      ($g["course_code"] ?? "") . " " .
-                      ($g["course_title"] ?? "") . " " .
-                      ($g["item_name"] ?? "") . " " .
-                      ($g["remarks"] ?? "")
-                    )
-                  );
+                  if ($published !== 1) echo "<span style='color:#b91c1c;font-weight:700;'>Hidden</span>";
+                  elseif ($r["score"] === null) echo "<span style='color:#6b7280;font-weight:700;'>Not graded</span>";
+                  else echo "<span style='color:green;font-weight:700;'>Released</span>";
                 ?>
-                <tr class="gRow" data-search="<?= htmlspecialchars($searchKey, ENT_QUOTES) ?>">
-                  <td>
-                    <b><?= htmlspecialchars((string)$g["course_code"]) ?></b><br>
-                    <span style="color:#6b7280;"><?= htmlspecialchars((string)$g["course_title"]) ?></span>
-                  </td>
-                  <td><?= htmlspecialchars((string)$g["item_name"]) ?></td>
-                  <td><?= htmlspecialchars((string)$sc) ?> / <?= htmlspecialchars((string)$max) ?></td>
-                  <td><b><?= htmlspecialchars((string)$pct) ?>%</b> <span style="color:#6b7280;"><?= gradeBadge((float)$pct) ?></span></td>
-                  <td><?= htmlspecialchars((string)($g["remarks"] ?? "-")) ?></td>
-                  <td><?= htmlspecialchars((string)$g["created_at"]) ?></td>
-                </tr>
-              <?php endforeach; ?>
-            <?php endif; ?>
+              </td>
+              <td>
+                <?php if ($published !== 1): ?>
+                  -
+                <?php elseif ($r["score"] === null): ?>
+                  -
+                <?php else: ?>
+                  <?= htmlspecialchars((string)$r["score"]) ?> / <?= (int)$r["max_score"] ?>
+                <?php endif; ?>
+              </td>
+              <td>
+                <?php if ($published !== 1): ?>
+                  -
+                <?php else: ?>
+                  <?= nl2br(htmlspecialchars((string)($r["feedback"] ?? ""))) ?>
+                <?php endif; ?>
+              </td>
+            </tr>
+          <?php endforeach; endif; ?>
           </tbody>
         </table>
+      </div>
 
-        <p class="muted hidden" id="noMatch">No grades match your search.</p>
+      <div style="margin-top:16px;">
+        <a class="back" href="<?= $base ?>/student/course.php?course_id=<?= $courseId ?>">← Back to Course</a>
       </div>
     </div>
   </main>
 </div>
-
-<script>
-(() => {
-  const search = document.getElementById('search');
-  const rows = Array.from(document.querySelectorAll('.gRow'));
-  const countPill = document.getElementById('countPill');
-  const noMatch = document.getElementById('noMatch');
-
-  function filter() {
-    const q = (search.value || '').trim().toLowerCase();
-    let visible = 0;
-
-    rows.forEach(r => {
-      const hay = r.getAttribute('data-search') || '';
-      const ok = q === '' || hay.includes(q);
-      r.style.display = ok ? '' : 'none';
-      if (ok) visible++;
-    });
-
-    if (countPill) countPill.textContent = String(visible);
-    if (noMatch) noMatch.classList.toggle('hidden', visible !== 0);
-  }
-
-  if (countPill) countPill.textContent = String(rows.length);
-
-  if (search) {
-    search.addEventListener('input', filter);
-    search.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { search.value = ''; filter(); }
-    });
-  }
-})();
-</script>
-
 </body>
 </html>

@@ -219,11 +219,18 @@ CREATE TABLE assignments (
   description TEXT NOT NULL,
   due_date DATE NULL,
   max_score INT NOT NULL DEFAULT 100,
+  grades_published TINYINT(1) NOT NULL DEFAULT 0,
+  category_id INT NULL,
+  is_published TINYINT(1) NOT NULL DEFAULT 0,
   file_path VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
   CONSTRAINT fk_assign_course FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
-  CONSTRAINT fk_assign_lecturer FOREIGN KEY (created_by) REFERENCES users(userID) ON DELETE CASCADE
+  CONSTRAINT fk_assign_lecturer FOREIGN KEY (created_by) REFERENCES users(userID) ON DELETE CASCADE,
+  CONSTRAINT fk_assignment_category
+  FOREIGN KEY (category_id) REFERENCES grade_categories(category_id)
+  ON DELETE SET NULL
+  ON UPDATE CASCADE
 );
 
 -- 2) Submissions table
@@ -245,4 +252,13 @@ CREATE TABLE submissions (
   CONSTRAINT fk_sub_assign FOREIGN KEY (assignment_id) REFERENCES assignments(assignment_id) ON DELETE CASCADE,
   CONSTRAINT fk_sub_student FOREIGN KEY (student_id) REFERENCES users(userID) ON DELETE CASCADE,
   CONSTRAINT fk_sub_grader FOREIGN KEY (graded_by) REFERENCES users(userID) ON DELETE SET NULL
+);
+
+CREATE TABLE grade_categories (
+  category_id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  name VARCHAR(50) NOT NULL,          -- e.g. CAT, QUIZ, ASSIGNMENT
+  weight DECIMAL(5,2) NOT NULL,       -- e.g. 30.00
+  UNIQUE(course_id, name),
+  FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
 );
