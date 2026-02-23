@@ -173,9 +173,8 @@ $recentAnnouncements = $annStmt->fetchAll();
     <ul class="nav">
       <li><a class="active" href="<?= $base ?>/student/dashboard.php">🏠 Dashboard</a></li>
       <li><a href="<?= $base ?>/student/course_hub.php">📚 Course Hub</a></li>
-      <li><a href="<?= $base ?>/student/study_groups.php">👥 Study Groups</a></li>
       <li><a href="<?= $base ?>/student/calendar.php">🗓 Calendar</a></li>
-              <li><a href="<?= $base ?>/student/profile.php">👤 Profile</a></li>
+      <li><a href="<?= $base ?>/student/profile.php">👤 Profile</a></li>
       <li><a href="<?= $base ?>/auth/logout.php">🚪 Logout</a></li>
     </ul>
   </aside>
@@ -192,7 +191,6 @@ $recentAnnouncements = $annStmt->fetchAll();
 
             <div class="quick-actions">
               <a class="qa" href="<?= $base ?>/student/course_hub.php">➕ Enroll to a Course</a>
-              <a class="qa" href="<?= $base ?>/student/grades.php">📈 View Grades</a>
               <a class="qa" href="<?= $base ?>/student/calendar.php">🗓 Event Calendar</a>
             </div>
 

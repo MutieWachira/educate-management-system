@@ -62,9 +62,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
   <aside class="sidebar">
     <h4>Navigation</h4>
     <ul class="nav">
-      <li><a href="<?= $base ?>/admin/dashboard.php">🏠 Dashboard</a></li>
-      <li><a class="active" href="<?= $base ?>/admin/manage_departments.php">🏫 Departments</a></li>
-      <li><a href="<?= $base ?>/admin/manage_courses.php">📚 Courses</a></li>
+      <li><a class="active" href="<?= $base ?>/admin/dashboard.php">🏠 Dashboard</a></li>
+        <li><a href="<?= $base ?>/admin/manage_users.php">👤 Manage Users</a></li>
+        <li><a href="<?= $base ?>/admin/create_user.php">➕ Create User</a></li>
+        <li><a href="<?= $base ?>/admin/manage_departments.php">🏫 Departments</a></li>
+        <li><a href="<?= $base ?>/admin/activity_logs.php">🧾 Activity Logs</a></li>
+        <li><a href="<?= $base ?>/admin/manage_courses.php">📚 Courses</a></li>
+        <li><a href="<?= $base ?>/admin/profile.php">👤 Profile</a></li>
+        <li><a href="<?= $base ?>/admin/assign_lecturers.php">🧑‍🏫 Assign Lecturers</a></li>
+        <li><a href="<?= $base ?>/admin/enroll_students.php">🧾 Enroll Students</a></li>
+        <li><a href="<?= $base ?>/auth/logout.php">🚪 Log Out</a></li>
     </ul>
   </aside>
 

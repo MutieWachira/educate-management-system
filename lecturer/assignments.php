@@ -89,11 +89,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       try {
         $pdo->beginTransaction();
 
+        $submissionType = trim($_POST["submission_type"] ?? "INDIVIDUAL");
+        if (!in_array($submissionType, ["INDIVIDUAL", "GROUP"], true)) {
+          $submissionType = "INDIVIDUAL";
+        }
+
         $ins = $pdo->prepare("
-          INSERT INTO assignments (course_id, created_by, title, description, due_date, max_score, file_path)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO assignments (course_id, created_by, title, description, due_date, max_score, file_path, submission_type)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ");
-        $ins->execute([$courseId, $lecturerId, $title, $description, $dateVal, $max_score, $relativePath]);
+        $ins->execute([$courseId, $lecturerId, $title, $description, $dateVal, $max_score, $relativePath, $submissionType]);
 
         $assignmentId = (int)$pdo->lastInsertId();
 
@@ -189,6 +194,10 @@ $assignments = $list->fetchAll();
         <input type="text" name="title" placeholder="Assignment title e.g. OOP CAT 1" required>
         <input type="number" name="max_score" min="1" value="100" placeholder="Max Score" required>
         <input type="date" name="due_date" placeholder="Due date (optional)">
+        <select name="submission_type" required>
+          <option value="INDIVIDUAL">Individual</option>
+          <option value="GROUP">Group</option>
+        </select>
         <textarea name="description" placeholder="Instructions..." required style="width:100%;min-height:110px;padding:12px;border-radius:12px;border:1px solid #e5e7eb;"></textarea>
         <input type="file" name="file" accept=".pdf,.doc,.docx">
         <button class="btn" type="submit">Create Assignment</button>

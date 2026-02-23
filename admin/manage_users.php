@@ -85,9 +85,12 @@ function roleBadgeClass(string $r): string
         <li><a class="active" href="<?= $base ?>/admin/manage_users.php">👤 Manage Users</a></li>
         <li><a href="<?= $base ?>/admin/create_user.php">➕ Create User</a></li>
         <li><a href="<?= $base ?>/admin/manage_departments.php">🏫 Departments</a></li>
+        <li><a href="<?= $base ?>/admin/activity_logs.php">🧾 Activity Logs</a></li>
         <li><a href="<?= $base ?>/admin/manage_courses.php">📚 Courses</a></li>
+        <li><a href="<?= $base ?>/admin/profile.php">👤 Profile</a></li>
         <li><a href="<?= $base ?>/admin/assign_lecturers.php">🧑‍🏫 Assign Lecturers</a></li>
         <li><a href="<?= $base ?>/admin/enroll_students.php">🧾 Enroll Students</a></li>
+        <li><a href="<?= $base ?>/auth/logout.php">🚪 Log Out</a></li>
       </ul>
     </aside>
 
@@ -121,6 +124,7 @@ function roleBadgeClass(string $r): string
   <table id="usersTable">
     <thead>
       <tr>
+        <th>Admission/Staff No.</th>
         <th>Student ID</th>
         <th>Full Name</th>
         <th>Email</th>
@@ -134,6 +138,9 @@ function roleBadgeClass(string $r): string
       <?php else: ?>
         <?php foreach ($users as $u): ?>
           <tr class="user-row">
+            <td class = "col-staffno" >
+              <?= htmlspecialchars((string)($u["staff_no"] ?? "-")) ?>
+            </td>
             <td class="col-adm">
               <?= htmlspecialchars((string)($u["admission_no"] ?? "-")) ?>
             </td>

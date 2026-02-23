@@ -235,6 +235,10 @@ $groups = $stmt->fetchAll();
                 <?php if ((int)$g["is_member"] === 1): ?>
                   <form method="post" style="display:inline;">
                     <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf"]) ?>">
+                    <a class="action-link"
+   href="<?= $base ?>/group/group_members.php?course_id=<?= $courseId ?>&group_id=<?= (int)$g["group_id"] ?>">
+  Members
+</a>
                     <input type="hidden" name="action" value="leave">
                     <input type="hidden" name="group_id" value="<?= (int)$g["group_id"] ?>">
                     <button class="action-link danger" type="submit" style="cursor:pointer;">Leave</button>

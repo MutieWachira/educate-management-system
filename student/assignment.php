@@ -10,9 +10,10 @@ require_role(["STUDENT"]);
 require_once __DIR__ . "/../config/db.php";
 
 $base = "/education%20system";
-$studentId = (int)$_SESSION["user"]["user_id"];
-$courseId = (int)($_GET["course_id"] ?? 0);
+$studentId = (int)($_SESSION["user"]["user_id"] ?? 0);
+$courseId  = (int)($_GET["course_id"] ?? 0);
 
+if ($studentId <= 0) { http_response_code(401); die("Not authenticated."); }
 if ($courseId <= 0) die("Invalid course.");
 
 $check = $pdo->prepare("SELECT 1 FROM enrollments WHERE student_id=? AND course_id=? LIMIT 1");
@@ -25,7 +26,18 @@ $cq->execute([$courseId]);
 $course = $cq->fetch();
 if (!$course) die("Course not found.");
 
-// List assignments + whether student has submitted
+// Get student's group_id (if any) for this course (needed for GROUP submission status)
+$gs = $pdo->prepare("
+  SELECT sgm.group_id
+  FROM study_group_members sgm
+  INNER JOIN study_groups sg ON sg.group_id = sgm.group_id
+  WHERE sgm.student_id=? AND sg.course_id=? LIMIT 1
+");
+$gs->execute([$studentId, $courseId]);
+$groupRow = $gs->fetch();
+$groupId = $groupRow ? (int)$groupRow["group_id"] : 0;
+
+// List assignments + whether student (or their group) has submitted
 $sql = "
   SELECT
     a.assignment_id,
@@ -33,16 +45,29 @@ $sql = "
     a.due_date,
     a.max_score,
     a.created_at,
+    a.submission_type,
     EXISTS(
-      SELECT 1 FROM submissions s
-      WHERE s.assignment_id=a.assignment_id AND s.student_id=?
+      SELECT 1
+      FROM submissions s
+      WHERE s.assignment_id = a.assignment_id
+        AND (
+          (a.submission_type = 'INDIVIDUAL' AND s.student_id = :student_id)
+          OR
+          (a.submission_type = 'GROUP' AND s.group_id = :group_id)
+        )
     ) AS has_submitted
   FROM assignments a
-  WHERE a.course_id=?
+  WHERE a.course_id = :course_id
   ORDER BY a.assignment_id DESC
 ";
+
 $stmt = $pdo->prepare($sql);
-$stmt->execute([$studentId, $courseId]);
+$stmt->execute([
+  ':student_id' => $studentId,
+  ':group_id'   => $groupId,
+  ':course_id'  => $courseId
+]);
+
 $assignments = $stmt->fetchAll();
 ?>
 <!doctype html>
@@ -61,7 +86,7 @@ $assignments = $stmt->fetchAll();
     <div>Academic Collaboration System<br><span style="font-size:12px;opacity:.85;">Student Portal</span></div>
   </div>
   <div class="user">
-    <div class="pill"><?= htmlspecialchars($_SESSION["user"]["full_name"]) ?> • STUDENT</div>
+    <div class="pill"><?= htmlspecialchars((string)($_SESSION["user"]["full_name"] ?? "Student")) ?> • STUDENT</div>
   </div>
 </div>
 
@@ -108,6 +133,10 @@ $assignments = $stmt->fetchAll();
                   <span style="font-weight:800;color:#065f46;">Submitted</span>
                 <?php else: ?>
                   <span style="font-weight:800;color:#b45309;">Not submitted</span>
+                <?php endif; ?>
+
+                <?php if (($a["submission_type"] ?? "") === "GROUP"): ?>
+                  <div style="font-size:12px;opacity:.7;margin-top:2px;">Group</div>
                 <?php endif; ?>
               </td>
               <td>

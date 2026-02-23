@@ -12,10 +12,13 @@ require_once __DIR__ . "/../includes/notifier.php";
 require_once __DIR__ . "/../includes/logger.php";
 
 $base = "/education%20system";
-$lecturerId = (int)$_SESSION["user"]["user_id"];
-$courseId = (int)($_GET["course_id"] ?? 0);
+$lecturerId   = (int)($_SESSION["user"]["user_id"] ?? 0);
+$lecturerName = (string)($_SESSION["user"]["full_name"] ?? "Lecturer");
+
+$courseId     = (int)($_GET["course_id"] ?? 0);
 $assignmentId = (int)($_GET["assignment_id"] ?? 0);
 
+if ($lecturerId <= 0) { http_response_code(401); die("Not authenticated."); }
 if ($courseId <= 0 || $assignmentId <= 0) die("Invalid request.");
 
 // Ensure assigned
@@ -49,7 +52,7 @@ $published = (int)$assignment["grades_published"];
 
 // POST actions
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-  if (!hash_equals($_SESSION["csrf"], (string)($_POST["csrf"] ?? ""))) die("Invalid CSRF token.");
+  if (!hash_equals((string)$_SESSION["csrf"], (string)($_POST["csrf"] ?? ""))) die("Invalid CSRF token.");
 
   $action = (string)($_POST["action"] ?? "");
 
@@ -72,7 +75,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     exit;
   }
 
-  // ✅ Grade one submission (SECURE: ensure submission belongs to this assignment)
+  // ✅ Grade one submission
   if ($action === "grade") {
     $submissionId = (int)($_POST["submission_id"] ?? 0);
     $score = trim((string)($_POST["score"] ?? ""));
@@ -89,36 +92,131 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       if ($scoreVal < 0 || $scoreVal > $max) {
         $error = "Score must be between 0 and $max.";
       } else {
-        // ✅ extra validation: only update rows under THIS assignment
-        $upd = $pdo->prepare("
-          UPDATE submissions
-          SET score=?, feedback=?, graded_at=NOW(), graded_by=?
-          WHERE submission_id=? AND assignment_id=?
-          LIMIT 1
-        ");
-        $upd->execute([
-          $scoreVal,
-          ($feedback === "" ? null : $feedback),
-          $lecturerId,
-          $submissionId,
-          $assignmentId
-        ]);
+        try {
+          $pdo->beginTransaction();
 
-        log_activity($pdo, $lecturerId, "GRADE_SUBMISSION", "Sub: $submissionId | Score: $scoreVal/$max");
+          // 1) Confirm submission belongs to this assignment + get group_id/student_id
+          $subQ = $pdo->prepare("
+            SELECT submission_id, assignment_id, student_id, group_id
+            FROM submissions
+            WHERE submission_id=? AND assignment_id=?
+            LIMIT 1
+          ");
+          $subQ->execute([$submissionId, $assignmentId]);
+          $subRow = $subQ->fetch();
+          if (!$subRow) {
+            throw new RuntimeException("Invalid submission reference.");
+          }
 
-        header("Location: {$base}/lecturer/grade_submissions.php?course_id={$courseId}&assignment_id={$assignmentId}&ok=graded");
-        exit;
+          $groupId   = (int)($subRow["group_id"] ?? 0);
+          $studentId = (int)($subRow["student_id"] ?? 0);
+
+          // 2) Update the submission row
+          $upd = $pdo->prepare("
+            UPDATE submissions
+            SET score=?, feedback=?, graded_at=NOW(), graded_by=?
+            WHERE submission_id=? AND assignment_id=?
+            LIMIT 1
+          ");
+          $upd->execute([
+            $scoreVal,
+            ($feedback === "" ? null : $feedback),
+            $lecturerId,
+            $submissionId,
+            $assignmentId
+          ]);
+
+          // 3) ALSO record grades for students (INDIVIDUAL = 1 student, GROUP = all members)
+          // Use a consistent item_name so updates overwrite instead of duplicates.
+          // (No schema change required.)
+          $itemName = "Assignment #{$assignmentId}";
+
+          // Helper: upsert grade for a student (update if exists else insert)
+          $upsertGrade = function(int $sid) use ($pdo, $courseId, $lecturerId, $itemName, $scoreVal, $max, $feedback): void {
+            $find = $pdo->prepare("
+              SELECT grade_id
+              FROM grades
+              WHERE course_id=? AND student_id=? AND item_name=?
+              LIMIT 1
+            ");
+            $find->execute([$courseId, $sid, $itemName]);
+            $gradeId = $find->fetchColumn();
+
+            if ($gradeId) {
+              $gUpd = $pdo->prepare("
+                UPDATE grades
+                SET lecturer_id=?, score=?, max_score=?, out_of=?, remarks=?
+                WHERE grade_id=?
+                LIMIT 1
+              ");
+              $gUpd->execute([
+                $lecturerId,
+                $scoreVal,
+                $max,
+                $max,
+                ($feedback === "" ? null : $feedback),
+                (int)$gradeId
+              ]);
+            } else {
+              $gIns = $pdo->prepare("
+                INSERT INTO grades (course_id, student_id, lecturer_id, item_name, score, max_score, out_of, remarks)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              ");
+              $gIns->execute([
+                $courseId,
+                $sid,
+                $lecturerId,
+                $itemName,
+                $scoreVal,
+                $max,
+                $max,
+                ($feedback === "" ? null : $feedback)
+              ]);
+            }
+          };
+
+          if ($groupId > 0) {
+            // GROUP: give the same marks to every member
+            $membersQ = $pdo->prepare("SELECT student_id FROM study_group_members WHERE group_id=?");
+            $membersQ->execute([$groupId]);
+            $members = $membersQ->fetchAll();
+
+            foreach ($members as $m) {
+              $sid = (int)($m["student_id"] ?? 0);
+              if ($sid > 0) $upsertGrade($sid);
+            }
+          } else {
+            // INDIVIDUAL: give marks to that one student
+            if ($studentId > 0) $upsertGrade($studentId);
+          }
+
+          // Log actor correctly (lecturer)
+          log_activity($pdo, $lecturerId, "GRADE_SUBMISSION", "Course: $courseId | Assignment: $assignmentId | Score: $scoreVal/$max");
+
+          $pdo->commit();
+
+          header("Location: {$base}/lecturer/grade_submissions.php?course_id={$courseId}&assignment_id={$assignmentId}&ok=graded");
+          exit;
+
+        } catch (Throwable $e) {
+          if ($pdo->inTransaction()) $pdo->rollBack();
+          error_log("GRADE_SUBMISSIONS ERROR: " . $e->getMessage());
+          $error = "Failed to save grade.";
+        }
       }
     }
   }
 }
 
-// List submissions (include student admission_no)
+// List submissions
 $sql = "
   SELECT s.submission_id, s.file_path, s.text_answer, s.submitted_at, s.score, s.feedback, s.graded_at,
-         u.full_name, u.admission_no
+         s.student_id, s.group_id, s.submitted_by,
+         u.full_name AS student_name, u.admission_no,
+         g.name AS group_name
   FROM submissions s
-  INNER JOIN users u ON u.userID = s.student_id
+  LEFT JOIN users u ON u.userID = s.student_id
+  LEFT JOIN study_groups g ON g.group_id = s.group_id
   WHERE s.assignment_id=?
   ORDER BY s.submitted_at DESC
 ";
@@ -126,7 +224,7 @@ $stmt = $pdo->prepare($sql);
 $stmt->execute([$assignmentId]);
 $subs = $stmt->fetchAll();
 
-// Refresh published status (in case toggled)
+// Refresh published status
 $aq->execute([$assignmentId, $courseId, $lecturerId]);
 $assignment = $aq->fetch();
 $published = (int)$assignment["grades_published"];
@@ -146,7 +244,9 @@ $published = (int)$assignment["grades_published"];
     <div class="brand-badge">AC</div>
     <div>Academic Collaboration System<br><span style="font-size:12px;opacity:.85;">Lecturer Panel</span></div>
   </div>
-  <div class="user"><div class="pill"><?= htmlspecialchars($_SESSION["user"]["full_name"]) ?> • LECTURER</div></div>
+  <div class="user">
+    <div class="pill"><?= htmlspecialchars($lecturerName) ?> • LECTURER</div>
+  </div>
 </div>
 
 <div class="layout">
@@ -171,9 +271,9 @@ $published = (int)$assignment["grades_published"];
           </p>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <a class="btn" href="<?= $base ?>/lecturer/gradebook.php?course_id=<?= $courseId ?>">📊 Gradebook</a>
-          <a class="btn" href="<?= $base ?>/lecturer/grade_categories.php?course_id=<?= $courseId ?>">⚖ Weights</a>
-          <a class="btn" href="<?= $base ?>/lecturer/course.php?course_id=<?= $courseId ?>">← Back</a>
+          <a class="btn" href="<?= $base ?>/lecturer/gradebook.php?course_id=<?= (int)$courseId ?>">📊 Gradebook</a>
+          <a class="btn" href="<?= $base ?>/lecturer/grade_categories.php?course_id=<?= (int)$courseId ?>">⚖ Weights</a>
+          <a class="btn" href="<?= $base ?>/lecturer/course.php?course_id=<?= (int)$courseId ?>">← Back</a>
         </div>
       </div>
 
@@ -181,7 +281,7 @@ $published = (int)$assignment["grades_published"];
       <?php if($error): ?><p style="color:#b91c1c;font-weight:800;"><?= htmlspecialchars($error) ?></p><?php endif; ?>
 
       <form method="post" style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
-        <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf"]) ?>">
+        <input type="hidden" name="csrf" value="<?= htmlspecialchars((string)$_SESSION["csrf"]) ?>">
         <?php if (!$published): ?>
           <input type="hidden" name="action" value="publish">
           <button class="btn" type="submit">Publish Grades</button>
@@ -195,7 +295,7 @@ $published = (int)$assignment["grades_published"];
         <table>
           <thead>
             <tr>
-              <th>Student</th>
+              <th>Student / Group</th>
               <th>Submitted</th>
               <th>Work</th>
               <th>Score</th>
@@ -209,8 +309,13 @@ $published = (int)$assignment["grades_published"];
           <?php else: foreach($subs as $s): ?>
             <tr>
               <td>
-                <b><?= htmlspecialchars((string)$s["full_name"]) ?></b><br>
-                <span style="color:#6b7280;font-size:13px;"><?= htmlspecialchars((string)($s["admission_no"] ?? "N/A")) ?></span>
+                <?php if (!empty($s["group_id"])): ?>
+                  <b>Group: <?= htmlspecialchars((string)($s["group_name"] ?? ("Group #" . (int)$s["group_id"]))) ?></b><br>
+                  <span style="color:#6b7280;font-size:13px;">Group ID: <?= (int)$s["group_id"] ?></span>
+                <?php else: ?>
+                  <b><?= htmlspecialchars((string)($s["student_name"] ?? "Student")) ?></b><br>
+                  <span style="color:#6b7280;font-size:13px;"><?= htmlspecialchars((string)($s["admission_no"] ?? "N/A")) ?></span>
+                <?php endif; ?>
               </td>
 
               <td><?= htmlspecialchars((string)$s["submitted_at"]) ?></td>
@@ -234,7 +339,7 @@ $published = (int)$assignment["grades_published"];
 
               <td>
                 <form method="post" style="display:grid;gap:8px;">
-                  <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION["csrf"]) ?>">
+                  <input type="hidden" name="csrf" value="<?= htmlspecialchars((string)$_SESSION["csrf"]) ?>">
                   <input type="hidden" name="action" value="grade">
                   <input type="hidden" name="submission_id" value="<?= (int)$s["submission_id"] ?>">
 
@@ -261,5 +366,6 @@ $published = (int)$assignment["grades_published"];
     </div>
   </main>
 </div>
+
 </body>
 </html>

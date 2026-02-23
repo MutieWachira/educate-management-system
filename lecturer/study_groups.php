@@ -97,6 +97,10 @@ $groups = $stmt->fetchAll();
                 <td><?= htmlspecialchars($g["creator_name"]) ?></td>
                 <td><?= (int)$g["member_count"] ?></td>
                 <td><?= htmlspecialchars($g["created_at"]) ?></td>
+    <td>                <a class="action-link"
+   href="<?= $base ?>/group/group_members.php?course_id=<?= $courseId ?>&group_id=<?= (int)$g["group_id"] ?>">
+  Members
+</a></td>
               </tr>
             <?php endforeach; ?>
           <?php endif; ?>

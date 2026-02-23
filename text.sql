@@ -185,10 +185,15 @@ CREATE INDEX idx_notif_user_read ON notifications(user_id, is_read);
 CREATE TABLE activity_logs (
   log_id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
+  role VARCHAR(20) NULL,
   action VARCHAR(80) NOT NULL,
   details VARCHAR(255) NULL,
+  ip_address VARCHAR(45) NULL,
+  user_agent VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX(user_id),
+  INDEX idx_user_id(user_id),
+  INDEX idx_action(action),
+  INDEX idx_created_at(created_at),
   CONSTRAINT fk_logs_user FOREIGN KEY (user_id)
     REFERENCES users(userID) ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -262,3 +267,44 @@ CREATE TABLE grade_categories (
   UNIQUE(course_id, name),
   FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
 );
+
+-- =========================================
+-- GROUP ASSIGNMENTS + GROUP SUBMISSIONS
+-- =========================================
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- A) assignments: add submission_type + grades_published (if missing)
+ALTER TABLE assignments
+  ADD COLUMN IF NOT EXISTS submission_type ENUM('INDIVIDUAL','GROUP') NOT NULL DEFAULT 'INDIVIDUAL',
+  ADD COLUMN IF NOT EXISTS grades_published TINYINT(1) NOT NULL DEFAULT 0;
+
+-- B) submissions: support group submissions
+ALTER TABLE submissions
+  ADD COLUMN IF NOT EXISTS group_id INT NULL AFTER student_id,
+  ADD COLUMN IF NOT EXISTS submitted_by INT NULL AFTER group_id,
+  ADD COLUMN IF NOT EXISTS graded_by INT NULL AFTER graded_at;
+
+-- C) Foreign Keys
+ALTER TABLE submissions
+  ADD CONSTRAINT fk_submissions_group
+    FOREIGN KEY (group_id) REFERENCES study_groups(group_id)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT fk_submissions_submitted_by
+    FOREIGN KEY (submitted_by) REFERENCES users(userID)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT fk_submissions_graded_by
+    FOREIGN KEY (graded_by) REFERENCES users(userID)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- D) Uniqueness rules
+-- INDIVIDUAL: one submission per assignment per student
+-- GROUP: one submission per assignment per group
+ALTER TABLE submissions
+  ADD UNIQUE KEY uq_sub_individual (assignment_id, student_id),
+  ADD UNIQUE KEY uq_sub_group (assignment_id, group_id);
+
+-- E) Helpful indexes
+CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id);
+CREATE INDEX IF NOT EXISTS idx_members_group ON study_group_members(group_id);
+
+SET FOREIGN_KEY_CHECKS = 1;

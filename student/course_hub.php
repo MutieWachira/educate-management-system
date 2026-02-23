@@ -111,8 +111,8 @@ $courses = $stmt->fetchAll();
     <ul class="nav">
       <li><a href="<?= $base ?>/student/dashboard.php">🏠 Dashboard</a></li>
       <li><a class="active" href="<?= $base ?>/student/course_hub.php">📚 Course Hub</a></li>
-      <li><a href="<?= $base ?>/student/grades.php">📈 Grades</a></li>
       <li><a href="<?= $base ?>/student/calendar.php">🗓 Calendar</a></li>
+      <li><a href="<?= $base ?>/student/profile.php">👤 Profile</a></li>
       <li><a href="<?= $base ?>/auth/logout.php">🚪 Logout</a></li>
     </ul>
   </aside>

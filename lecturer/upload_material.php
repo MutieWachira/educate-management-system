@@ -49,7 +49,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     if (($file["error"] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
       $error = "File upload failed (error code: " . (int)($file["error"] ?? -1) . ").";
     } else {
-      // ✅ Limit size (15MB)
+      // Limit size (15MB)
       $maxBytes = 15 * 1024 * 1024;
       if ((int)($file["size"] ?? 0) > $maxBytes) {
         $error = "File too large. Maximum allowed is 15MB.";
@@ -63,7 +63,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         if (!in_array($ext, $allowedExt, true)) {
           $error = "Only PDF/DOC/DOCX/PPT/PPTX files allowed.";
         } else {
-          // ✅ Extra MIME validation (helps against fake extensions)
+          // Extra MIME validation (helps against fake extensions)
           $finfo = finfo_open(FILEINFO_MIME_TYPE);
           $mime = $finfo ? (string)finfo_file($finfo, $tmp) : "";
           if ($finfo) finfo_close($finfo);
@@ -90,7 +90,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
             $uploadDir = __DIR__ . "/../assets/uploads/";
 
-            // ✅ Ensure upload dir exists and is writable
+            // Ensure upload dir exists and is writable
             if (!is_dir($uploadDir)) {
               if (!mkdir($uploadDir, 0777, true)) {
                 $error = "Upload folder not writable. Fix permissions for: " . $uploadDir;
@@ -140,13 +140,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     );
                   }
 
-                  // ✅ Log only after everything succeeds
-                  log_activity(
-                    $pdo,
-                    $lecturerId,
-                    "UPLOAD_MATERIAL",
-                    "Course: $courseId | Title: $title | File: $newName"
-                  );
+                  // Log only after everything succeeds
+                 log_activity($pdo, $lecturerId, "UPLOAD_MATERIAL", "Course: $courseId | Title: $title");
 
                   $pdo->commit();
 

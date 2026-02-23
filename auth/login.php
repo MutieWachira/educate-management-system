@@ -7,6 +7,7 @@ error_reporting(E_ALL);
 
 session_start();
 require_once __DIR__ . "/../config/db.php";
+require_once __DIR__ . "/../includes/logger.php";
 
 $error = "";
 $base = "/education%20system";
@@ -38,6 +39,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $stmt = $pdo->prepare("SELECT userID, full_name, email, password, role, must_change_password FROM users WHERE email = ? LIMIT 1");
     $stmt->execute([$email]);
     $user = $stmt->fetch();
+
+    log_activity($pdo, (int)$user["userID"], "LOGIN", "User logged in");
 
     if (!$user) {
       $error = "Invalid email or password.";
