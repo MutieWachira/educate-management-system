@@ -36,18 +36,21 @@ foreach ($categories as $c) {
   $totalWeight += (float)$c["weight"];
 }
 
-// Assignments + my submission scores
+// Assignments + my submission scores including group work
 $sql = "
   SELECT a.assignment_id, a.title, a.max_score, a.due_date, a.grades_published, a.category_id,
          s.score, s.feedback, s.submitted_at
   FROM assignments a
   LEFT JOIN submissions s
-    ON s.assignment_id = a.assignment_id AND s.student_id = ?
-  WHERE a.course_id=?
+    ON s.assignment_id = a.assignment_id
+       AND (s.student_id = ? OR s.group_id IN (
+           SELECT group_id FROM study_group_members WHERE student_id = ?
+       ))
+  WHERE a.course_id = ?
   ORDER BY a.assignment_id DESC
 ";
 $stmt = $pdo->prepare($sql);
-$stmt->execute([$studentId, $courseId]);
+$stmt->execute([$studentId, $studentId, $courseId]);
 $rows = $stmt->fetchAll();
 
 function letter_grade(float $p): string {

@@ -48,7 +48,9 @@ foreach($rows as $r){
     <h4>Navigation</h4>
     <ul class="nav">
       <li><a href="<?= $base ?>/student/dashboard.php">🏠 Dashboard</a></li>
-      <li><a class="active" href="#">📅 Calendar</a></li>
+      <li><a href="<?= $base ?>/student/course_hub.php">📚 Course Hub</a></li>
+      <li><a class="active" href="<?= $base ?>/student/calendar.php">🗓 Calendar</a></li>
+      <li><a href="<?= $base ?>/student/profile.php">👤 Profile</a></li>
       <li><a href="<?= $base ?>/auth/logout.php">🚪 Logout</a></li>
     </ul>
   </aside>

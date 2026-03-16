@@ -21,23 +21,19 @@ $assignmentId = (int)($_GET["assignment_id"] ?? 0);
 if ($lecturerId <= 0) { http_response_code(401); die("Not authenticated."); }
 if ($courseId <= 0 || $assignmentId <= 0) die("Invalid request.");
 
-// Ensure assigned
 $check = $pdo->prepare("SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=? LIMIT 1");
 $check->execute([$lecturerId, $courseId]);
 if (!$check->fetch()) { http_response_code(403); die("Not allowed."); }
 
-// CSRF
 if (empty($_SESSION["csrf"])) $_SESSION["csrf"] = bin2hex(random_bytes(16));
 
 $msg = "";
 $error = "";
 
-// Show messages after redirects
 if (($_GET["ok"] ?? "") === "published") $msg = "Grades published. Students can now see scores.";
 if (($_GET["ok"] ?? "") === "hidden")    $msg = "Grades hidden. Students cannot see scores.";
 if (($_GET["ok"] ?? "") === "graded")    $msg = "Saved grade.";
 
-// Fetch assignment
 $aq = $pdo->prepare("
   SELECT assignment_id, title, due_date, max_score, grades_published
   FROM assignments
@@ -45,19 +41,22 @@ $aq = $pdo->prepare("
   LIMIT 1
 ");
 $aq->execute([$assignmentId, $courseId, $lecturerId]);
-$assignment = $aq->fetch();
+$assignment = $aq->fetch(PDO::FETCH_ASSOC);
+
 if (!$assignment) die("Assignment not found or not yours.");
 
 $published = (int)$assignment["grades_published"];
 
-// POST actions
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-  if (!hash_equals((string)$_SESSION["csrf"], (string)($_POST["csrf"] ?? ""))) die("Invalid CSRF token.");
+
+  if (!hash_equals((string)$_SESSION["csrf"], (string)($_POST["csrf"] ?? ""))) {
+    die("Invalid CSRF token.");
+  }
 
   $action = (string)($_POST["action"] ?? "");
 
-  // ✅ Publish / Unpublish
   if ($action === "publish" || $action === "unpublish") {
+
     $val = ($action === "publish") ? 1 : 0;
 
     $upd = $pdo->prepare("
@@ -66,168 +65,198 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       WHERE assignment_id=? AND course_id=? AND created_by=?
       LIMIT 1
     ");
+
     $upd->execute([$val, $assignmentId, $courseId, $lecturerId]);
 
     log_activity($pdo, $lecturerId, "TOGGLE_GRADES", "Assignment: $assignmentId | Published: $val");
 
     $ok = $val ? "published" : "hidden";
+
     header("Location: {$base}/lecturer/grade_submissions.php?course_id={$courseId}&assignment_id={$assignmentId}&ok={$ok}");
     exit;
   }
 
-  // ✅ Grade one submission
   if ($action === "grade") {
+
     $submissionId = (int)($_POST["submission_id"] ?? 0);
     $score = trim((string)($_POST["score"] ?? ""));
     $feedback = trim((string)($_POST["feedback"] ?? ""));
 
     if ($submissionId <= 0) {
       $error = "Invalid submission.";
-    } elseif ($score === "" || !is_numeric($score)) {
-      $error = "Score must be a number.";
-    } else {
+    }
+    elseif ($score === "" || !is_numeric($score)) {
+      $error = "Score must be numeric.";
+    }
+    else {
+
       $scoreVal = (float)$score;
       $max = (float)$assignment["max_score"];
 
-      if ($scoreVal < 0 || $scoreVal > $max) {
-        $error = "Score must be between 0 and $max.";
-      } else {
-        try {
-          $pdo->beginTransaction();
+      // --- Overgrading detection ---
+      if ($scoreVal > $max) {
+          $error = "⚠️ Fault: Score {$scoreVal} exceeds maximum {$max}.";
+      }
+      // --------------------------------
 
-          // 1) Confirm submission belongs to this assignment + get group_id/student_id
-          $subQ = $pdo->prepare("
-            SELECT submission_id, assignment_id, student_id, group_id
-            FROM submissions
-            WHERE submission_id=? AND assignment_id=?
-            LIMIT 1
-          ");
-          $subQ->execute([$submissionId, $assignmentId]);
-          $subRow = $subQ->fetch();
-          if (!$subRow) {
-            throw new RuntimeException("Invalid submission reference.");
-          }
+      if (!$error) { // Only continue saving if no overgrading fault
+          try {
 
-          $groupId   = (int)($subRow["group_id"] ?? 0);
-          $studentId = (int)($subRow["student_id"] ?? 0);
+            $pdo->beginTransaction();
 
-          // 2) Update the submission row
-          $upd = $pdo->prepare("
-            UPDATE submissions
-            SET score=?, feedback=?, graded_at=NOW(), graded_by=?
-            WHERE submission_id=? AND assignment_id=?
-            LIMIT 1
-          ");
-          $upd->execute([
-            $scoreVal,
-            ($feedback === "" ? null : $feedback),
-            $lecturerId,
-            $submissionId,
-            $assignmentId
-          ]);
-
-          // 3) ALSO record grades for students (INDIVIDUAL = 1 student, GROUP = all members)
-          // Use a consistent item_name so updates overwrite instead of duplicates.
-          // (No schema change required.)
-          $itemName = "Assignment #{$assignmentId}";
-
-          // Helper: upsert grade for a student (update if exists else insert)
-          $upsertGrade = function(int $sid) use ($pdo, $courseId, $lecturerId, $itemName, $scoreVal, $max, $feedback): void {
-            $find = $pdo->prepare("
-              SELECT grade_id
-              FROM grades
-              WHERE course_id=? AND student_id=? AND item_name=?
+            $subQ = $pdo->prepare("
+              SELECT submission_id, assignment_id, student_id, group_id
+              FROM submissions
+              WHERE submission_id=? AND assignment_id=?
               LIMIT 1
             ");
-            $find->execute([$courseId, $sid, $itemName]);
-            $gradeId = $find->fetchColumn();
 
-            if ($gradeId) {
-              $gUpd = $pdo->prepare("
-                UPDATE grades
-                SET lecturer_id=?, score=?, max_score=?, out_of=?, remarks=?
-                WHERE grade_id=?
+            $subQ->execute([$submissionId, $assignmentId]);
+            $subRow = $subQ->fetch(PDO::FETCH_ASSOC);
+
+            if (!$subRow) {
+              throw new RuntimeException("Invalid submission reference.");
+            }
+
+            $groupId   = (int)($subRow["group_id"] ?? 0);
+            $studentId = (int)($subRow["student_id"] ?? 0);
+
+            $upd = $pdo->prepare("
+              UPDATE submissions
+              SET score=?, feedback=?, graded_at=NOW(), graded_by=?
+              WHERE submission_id=? AND assignment_id=?
+              LIMIT 1
+            ");
+
+            $upd->execute([
+              $scoreVal,
+              ($feedback === "" ? null : $feedback),
+              $lecturerId,
+              $submissionId,
+              $assignmentId
+            ]);
+
+            $itemName = "Assignment #{$assignmentId}";
+
+            $upsertGrade = function(int $sid) use ($pdo,$courseId,$lecturerId,$itemName,$scoreVal,$max,$feedback){
+
+              $find = $pdo->prepare("
+                SELECT grade_id
+                FROM grades
+                WHERE course_id=? AND student_id=? AND item_name=?
                 LIMIT 1
               ");
-              $gUpd->execute([
-                $lecturerId,
-                $scoreVal,
-                $max,
-                $max,
-                ($feedback === "" ? null : $feedback),
-                (int)$gradeId
-              ]);
-            } else {
-              $gIns = $pdo->prepare("
-                INSERT INTO grades (course_id, student_id, lecturer_id, item_name, score, max_score, out_of, remarks)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+
+              $find->execute([$courseId,$sid,$itemName]);
+              $gradeId = $find->fetchColumn();
+
+              if ($gradeId) {
+
+                $gUpd = $pdo->prepare("
+                  UPDATE grades
+                  SET lecturer_id=?, score=?, max_score=?, out_of=?, remarks=?
+                  WHERE grade_id=?
+                ");
+
+                $gUpd->execute([
+                  $lecturerId,
+                  $scoreVal,
+                  $max,
+                  $max,
+                  ($feedback === "" ? null : $feedback),
+                  (int)$gradeId
+                ]);
+
+              } else {
+
+                $gIns = $pdo->prepare("
+                  INSERT INTO grades
+                  (course_id, student_id, lecturer_id, item_name, score, max_score, out_of, remarks)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+
+                $gIns->execute([
+                  $courseId,
+                  $sid,
+                  $lecturerId,
+                  $itemName,
+                  $scoreVal,
+                  $max,
+                  $max,
+                  ($feedback === "" ? null : $feedback)
+                ]);
+              }
+            };
+
+            if ($groupId > 0) {
+
+              $membersQ = $pdo->prepare("
+                SELECT student_id
+                FROM study_group_members
+                WHERE group_id=?
               ");
-              $gIns->execute([
-                $courseId,
-                $sid,
-                $lecturerId,
-                $itemName,
-                $scoreVal,
-                $max,
-                $max,
-                ($feedback === "" ? null : $feedback)
-              ]);
-            }
-          };
 
-          if ($groupId > 0) {
-            // GROUP: give the same marks to every member
-            $membersQ = $pdo->prepare("SELECT student_id FROM study_group_members WHERE group_id=?");
-            $membersQ->execute([$groupId]);
-            $members = $membersQ->fetchAll();
+              $membersQ->execute([$groupId]);
 
-            foreach ($members as $m) {
-              $sid = (int)($m["student_id"] ?? 0);
-              if ($sid > 0) $upsertGrade($sid);
+              $members = $membersQ->fetchAll(PDO::FETCH_ASSOC);
+
+              foreach ($members as $m) {
+
+                $sid = (int)($m["student_id"] ?? 0);
+
+                if ($sid > 0) {
+                  $upsertGrade($sid);
+                }
+
+              }
+
             }
-          } else {
-            // INDIVIDUAL: give marks to that one student
-            if ($studentId > 0) $upsertGrade($studentId);
+            else {
+
+              if ($studentId > 0) {
+                $upsertGrade($studentId);
+              }
+
+            }
+
+            log_activity($pdo,$lecturerId,"GRADE_SUBMISSION","Course: $courseId | Assignment: $assignmentId | Score: $scoreVal/$max");
+
+            $pdo->commit();
+
+            header("Location: {$base}/lecturer/grade_submissions.php?course_id={$courseId}&assignment_id={$assignmentId}&ok=graded");
+            exit;
+
           }
+          catch(Throwable $e){
 
-          // Log actor correctly (lecturer)
-          log_activity($pdo, $lecturerId, "GRADE_SUBMISSION", "Course: $courseId | Assignment: $assignmentId | Score: $scoreVal/$max");
+            if($pdo->inTransaction()) $pdo->rollBack();
 
-          $pdo->commit();
+            error_log($e->getMessage());
 
-          header("Location: {$base}/lecturer/grade_submissions.php?course_id={$courseId}&assignment_id={$assignmentId}&ok=graded");
-          exit;
+            $error="Failed to save grade.";
 
-        } catch (Throwable $e) {
-          if ($pdo->inTransaction()) $pdo->rollBack();
-          error_log("GRADE_SUBMISSIONS ERROR: " . $e->getMessage());
-          $error = "Failed to save grade.";
-        }
+          }
       }
+
     }
   }
 }
 
-// List submissions
-$sql = "
-  SELECT s.submission_id, s.file_path, s.text_answer, s.submitted_at, s.score, s.feedback, s.graded_at,
-         s.student_id, s.group_id, s.submitted_by,
-         u.full_name AS student_name, u.admission_no,
-         g.name AS group_name
-  FROM submissions s
-  LEFT JOIN users u ON u.userID = s.student_id
-  LEFT JOIN study_groups g ON g.group_id = s.group_id
-  WHERE s.assignment_id=?
-  ORDER BY s.submitted_at DESC
-";
-$stmt = $pdo->prepare($sql);
-$stmt->execute([$assignmentId]);
-$subs = $stmt->fetchAll();
+$stmt=$pdo->prepare("
+SELECT s.submission_id,s.file_path,s.text_answer,s.submitted_at,s.score,s.feedback,s.graded_at,
+       s.student_id,s.group_id,
+       u.full_name AS student_name,u.admission_no,
+       g.name AS group_name
+FROM submissions s
+LEFT JOIN users u ON u.userID=s.student_id
+LEFT JOIN study_groups g ON g.group_id=s.group_id
+WHERE s.assignment_id=?
+ORDER BY s.submitted_at DESC
+");
 
-// Refresh published status
-$aq->execute([$assignmentId, $courseId, $lecturerId]);
-$assignment = $aq->fetch();
-$published = (int)$assignment["grades_published"];
+$stmt->execute([$assignmentId]);
+
+$subs=$stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!doctype html>
 <html lang="en">

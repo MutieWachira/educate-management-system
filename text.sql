@@ -1,6 +1,4 @@
-Create database ems_db
 
---Users table
 create table users(
     userID int(10) PRIMARY KEY AUTO_INCREMENT,
     full_name varchar(50) NOT NULL,
@@ -18,16 +16,15 @@ CREATE UNIQUE INDEX uq_users_staff_no ON users(staff_no);
 
 INSERT INTO `users` (`userID`, `full_name`, `email`, `password`, `role`, `created_at`) VALUES 
 (NULL, 'admin', 'admin@ems.com', '123456', 'ADMIN', current_timestamp()), 
-(NULL, 'student', 'student@ems.com', '123456', 'STUDENT', current_timestamp());
+(NULL, 'student', 'student@ems.com', '123456', 'STUDENT', current_timestamp()),
 (NULL, 'lecturer', 'lecturer@ems.com', '123456', 'LECTURER', current_timestamp());
 
---department table
+
 CREATE TABLE departments (
   department_id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL UNIQUE
 );
 
---course table
 CREATE TABLE courses (
   course_id INT AUTO_INCREMENT PRIMARY KEY,
   course_code VARCHAR(30) NOT NULL UNIQUE,
@@ -40,7 +37,7 @@ CREATE TABLE courses (
     ON UPDATE CASCADE
 );
 
---lecturer courses
+
 CREATE TABLE lecturer_courses (
   lecturer_course_id INT AUTO_INCREMENT PRIMARY KEY,
   lecturer_id INT NOT NULL,
@@ -55,7 +52,7 @@ CREATE TABLE lecturer_courses (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
---enrollments table
+
 CREATE TABLE enrollments (
   enrollment_id INT AUTO_INCREMENT PRIMARY KEY,
   student_id INT NOT NULL,
@@ -70,7 +67,7 @@ CREATE TABLE enrollments (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
---uploded materials
+
 CREATE TABLE materials (
   material_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -86,7 +83,7 @@ CREATE TABLE materials (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
---announcements table
+
 CREATE TABLE announcements (
   announcement_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -103,7 +100,6 @@ CREATE TABLE announcements (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
---forum threads
 CREATE TABLE forum_threads (
   thread_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -119,7 +115,6 @@ CREATE TABLE forum_threads (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
---forum replies
 CREATE TABLE forum_replies (
   reply_id INT AUTO_INCREMENT PRIMARY KEY,
   thread_id INT NOT NULL,
@@ -134,7 +129,6 @@ CREATE TABLE forum_replies (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
---study group
 CREATE TABLE study_groups (
   group_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -150,7 +144,6 @@ CREATE TABLE study_groups (
     ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
---study group members
 CREATE TABLE study_group_members (
   member_id INT AUTO_INCREMENT PRIMARY KEY,
   group_id INT NOT NULL,
@@ -203,7 +196,7 @@ CREATE TABLE grades (
   course_id INT NOT NULL,
   student_id INT NOT NULL,
   lecturer_id INT NULL,
-  item_name VARCHAR(120) NOT NULL,   -- e.g. CAT 1, Assignment 2, Exam
+  item_name VARCHAR(120) NOT NULL,   
   score DECIMAL(5,2) NOT NULL,
   max_score DECIMAL(6,2) NOT NULL DEFAULT 100,
   out_of DECIMAL(5,2) NOT NULL DEFAULT 100,
@@ -215,7 +208,15 @@ CREATE TABLE grades (
 );
 CREATE INDEX idx_grades_student_course ON grades(student_id, course_id);
 
--- 1) Assignments table
+CREATE TABLE grade_categories (
+  category_id INT AUTO_INCREMENT PRIMARY KEY,
+  course_id INT NOT NULL,
+  name VARCHAR(50) NOT NULL,          
+  weight DECIMAL(5,2) NOT NULL,       
+  UNIQUE(course_id, name),
+  FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
+);
+
 CREATE TABLE assignments (
   assignment_id INT AUTO_INCREMENT PRIMARY KEY,
   course_id INT NOT NULL,
@@ -238,7 +239,6 @@ CREATE TABLE assignments (
   ON UPDATE CASCADE
 );
 
--- 2) Submissions table
 CREATE TABLE submissions (
   submission_id INT AUTO_INCREMENT PRIMARY KEY,
   assignment_id INT NOT NULL,
@@ -259,32 +259,22 @@ CREATE TABLE submissions (
   CONSTRAINT fk_sub_grader FOREIGN KEY (graded_by) REFERENCES users(userID) ON DELETE SET NULL
 );
 
-CREATE TABLE grade_categories (
-  category_id INT AUTO_INCREMENT PRIMARY KEY,
-  course_id INT NOT NULL,
-  name VARCHAR(50) NOT NULL,          -- e.g. CAT, QUIZ, ASSIGNMENT
-  weight DECIMAL(5,2) NOT NULL,       -- e.g. 30.00
-  UNIQUE(course_id, name),
-  FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE
-);
 
--- =========================================
--- GROUP ASSIGNMENTS + GROUP SUBMISSIONS
--- =========================================
+
 SET FOREIGN_KEY_CHECKS = 0;
 
--- A) assignments: add submission_type + grades_published (if missing)
+
 ALTER TABLE assignments
   ADD COLUMN IF NOT EXISTS submission_type ENUM('INDIVIDUAL','GROUP') NOT NULL DEFAULT 'INDIVIDUAL',
   ADD COLUMN IF NOT EXISTS grades_published TINYINT(1) NOT NULL DEFAULT 0;
 
--- B) submissions: support group submissions
+
 ALTER TABLE submissions
   ADD COLUMN IF NOT EXISTS group_id INT NULL AFTER student_id,
   ADD COLUMN IF NOT EXISTS submitted_by INT NULL AFTER group_id,
   ADD COLUMN IF NOT EXISTS graded_by INT NULL AFTER graded_at;
 
--- C) Foreign Keys
+
 ALTER TABLE submissions
   ADD CONSTRAINT fk_submissions_group
     FOREIGN KEY (group_id) REFERENCES study_groups(group_id)
@@ -296,14 +286,11 @@ ALTER TABLE submissions
     FOREIGN KEY (graded_by) REFERENCES users(userID)
     ON DELETE SET NULL ON UPDATE CASCADE;
 
--- D) Uniqueness rules
--- INDIVIDUAL: one submission per assignment per student
--- GROUP: one submission per assignment per group
 ALTER TABLE submissions
   ADD UNIQUE KEY uq_sub_individual (assignment_id, student_id),
   ADD UNIQUE KEY uq_sub_group (assignment_id, group_id);
 
--- E) Helpful indexes
+
 CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id);
 CREATE INDEX IF NOT EXISTS idx_members_group ON study_group_members(group_id);
 

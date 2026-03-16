@@ -64,7 +64,7 @@ $courses = $stmt->fetchAll();
             <h2>My Courses</h2>
             <p>Courses assigned to you by the admin.</p>
 
-            <!-- ✅ Live search (client-side) -->
+            <!-- Live search (client-side) -->
             <div class="searchbar">
               <input
                 type="text"
